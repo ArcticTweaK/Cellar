@@ -1,0 +1,33 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "cellar"
+dynamic = ["version"]
+description = "Run many Roblox accounts at once on Linux through Sober"
+readme = "README.md"
+license = "GPL-3.0-only"
+license-files = ["LICENSE"]
+authors = [{ name = "ArcticTweaK" }]
+requires-python = ">=3.10"
+dependencies = ["PySide6>=6.5", "requests", "cryptography", "secretstorage"]
+keywords = ["roblox", "sober", "linux", "multi-instance", "alts", "macro"]
+classifiers = [
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3",
+    "Environment :: X11 Applications :: Qt",
+    "Topic :: Games/Entertainment",
+]
+
+[project.scripts]
+cellar = "cellar.app:main"
+
+[tool.setuptools]
+packages = ["cellar", "cellar.ui", "cellar.data"]
+
+[tool.setuptools.dynamic]
+version = { attr = "cellar.__version__" }
+
+[tool.setuptools.package-data]
+"cellar.data" = ["*.png"]

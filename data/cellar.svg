@@ -1,0 +1,31 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256">
+  <!-- Cellar: a cellar's arched doorway with a rack of bottles inside; one glows (an account at work). -->
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#3d1622"/>
+      <stop offset="1" stop-color="#1b0b11"/>
+    </linearGradient>
+    <radialGradient id="wine" cx="0.42" cy="0.38" r="0.62">
+      <stop offset="0" stop-color="#ff8a9b"/>
+      <stop offset="0.55" stop-color="#d4374f"/>
+      <stop offset="1" stop-color="#9e1f35"/>
+    </radialGradient>
+  </defs>
+  <rect x="8" y="8" width="240" height="240" rx="52" fill="url(#bg)"/>
+  <path d="M40 226 V118 A88 88 0 0 1 216 118 V226" fill="#12080c" stroke="#c89b5e" stroke-width="11"
+        stroke-linejoin="round"/>
+  <g fill="#2f6342">
+    <circle cx="84" cy="108" r="19"/><circle cx="128" cy="108" r="19"/><circle cx="172" cy="108" r="19"/>
+    <circle cx="84" cy="152" r="19"/><circle cx="172" cy="152" r="19"/>
+    <circle cx="84" cy="196" r="19"/><circle cx="128" cy="196" r="19"/><circle cx="172" cy="196" r="19"/>
+    <circle cx="128" cy="64" r="19"/>
+  </g>
+  <g fill="#173322">
+    <circle cx="84" cy="108" r="8"/><circle cx="128" cy="108" r="8"/><circle cx="172" cy="108" r="8"/>
+    <circle cx="84" cy="152" r="8"/><circle cx="172" cy="152" r="8"/>
+    <circle cx="84" cy="196" r="8"/><circle cx="128" cy="196" r="8"/><circle cx="172" cy="196" r="8"/>
+    <circle cx="128" cy="64" r="8"/>
+  </g>
+  <circle cx="128" cy="152" r="19" fill="url(#wine)"/>
+  <circle cx="128" cy="152" r="8" fill="#7d1426"/>
+</svg>
