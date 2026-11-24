@@ -10,9 +10,9 @@ import re
 from typing import Callable, Optional
 
 from PySide6.QtCore import QTimer, QUrl
-from PySide6.QtWidgets import QDialog, QLabel, QVBoxLayout
+from PySide6.QtWidgets import QLabel, QVBoxLayout
 
-from .common import bg
+from .common import Dialog, bg
 
 # Imported on first use (see app.py): just check that it is there.
 import importlib.util
@@ -45,7 +45,7 @@ f(u,%s);f(p,%s);return 'done';})()"""
 SIGNUP_URL = "https://www.roblox.com/CreateAccount"
 
 
-class BrowserLogin(QDialog):
+class BrowserLogin(Dialog):
     """signup=True opens Roblox's own sign-up page instead: you fill it in and pass Roblox's checks
     yourself, exactly like on the website; the hub only picks up the login once the account exists."""
 

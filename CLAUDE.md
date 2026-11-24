@@ -1,17 +1,23 @@
 # Cellar — notes for Claude
 
 Multi-account Roblox launcher for Linux, built on **Sober** (Flatpak `org.vinegarhq.Sober`). Python 3.10+ / PySide6
-(Qt 6) desktop app, ~7.8k lines, no tests. Author: ArcticTweaK. GPL-3.0. Started as a port of the Windows app
+(Qt 6) desktop app, ~15k lines, unit tests in `tests/`. Author: ArcticTweaK. GPL-3.0. Started as a port of the Windows app
 "Roblox MultiHub" (C#) — many modules say "port of X.cs"; old name `roblox-multihub` still appears for migration.
 
 The developer's machine: **NixOS, KDE Plasma 6, Wayland**.
 
 ## Run / verify
 
-- No test suite. Minimum check after edits: `python3 -m py_compile cellar/*.py cellar/ui/*.py`
+- Checks before calling anything done: `python3 -m py_compile cellar/*.py cellar/ui/*.py`,
+  `nix develop -c ruff check cellar tests tools`, `nix develop -c python -m unittest discover -s tests -t .`
+- **Memory growth**: `nix develop -c python tools/soak.py [rounds]` fast-forwards hours of use off-screen (fake
+  accounts, no network: ticks, log lines, page switches, real menus + dialogs closed by a timer, Home shelves, theme
+  switches) and prints RSS / widget / QObject counts per round. Widgets and QObjects must stay flat; RSS may only
+  climb until the capped caches fill (game pictures: 400). Run it after UI changes that create widgets.
 - **Look at UI changes** without disturbing the user's running Cellar: `nix develop -c python tools/screenshot.py
-  OUT_DIR [themes] [tabs]` renders the main window off-screen with fake accounts (EMPTY=1 for no accounts),
-  then Read the PNGs.
+  OUT_DIR [themes] [tabs]` renders the main window off-screen with fake accounts and fake recent games, no network
+  (tabs: 0 Launch, 1 Presets, 2 Macros, 3 Anti-AFK, 4 Windows, 5 My Sober, 6 Performance, 7 Settings, 8 Help;
+  EMPTY=1 = no accounts, TABLE=1 = table view), then Read the PNGs.
 - Run from source: `nix develop -c python -m cellar` (devShell has PySide6, requests, cryptography, secretstorage,
   pasta, sway, wayvnc). Or `nix build` / `nix run .` (`result` symlink in repo is a nix build output, gitignored).
 - Non-Nix: `./install.sh` (venv in `~/.local/share/cellar-app`, symlink `~/.local/bin/cellar`).
@@ -69,57 +75,60 @@ cellar/
   audio.py        per-account sound: pw-dump streams -> pid (pipewire.sec.pid) -> cgroup = the instance; wpctl
                   set-mute / set-volume. LiveMixin.audio_tick every 5 s; Account.volume (-1 = Mute alts decides)
   schedule.py     scheduled presets: due() fires starts / stops once a day within a 15 min grace (overnight stops)
-  profiles.py     profile page data + full-body avatar / badge icon cache
-  games.py        Home tab data: Roblox discover sorts, search, favourites (+ set), details (fill), place->universe
-                  (disk cache), game icons + friend avatars cached in ~/.cache/cellar (blocking: use bg)
+  games.py        "Your games" data: recent places -> games (from_places, one per universe), the main account's
+                  favourites, details (fill), place->universe (disk cache), game icons in ~/.cache/cellar (blocking)
   playlink.py     roblox-player: / roblox: links from the website -> LaunchSpec; xdg-mime handler on/off; forward to Sober
   cli.py          `cellar list|launch|preset|stop|show` -> "cmd <json>" over the single-instance socket (plain AF_UNIX
                   client, path <tempdir>/cellar-<uid>); MainWindow.run_command answers (reply ends with \0);
                   add_shortcut() writes app-menu .desktop entries
   robloxlog.py    tails each client's Roblox log (appData/logs): joined / teleport / left / disconnected (+ reason)
   theme.py        colour themes: Theme tokens -> QPalette (Fusion) + one app style sheet; apply(key) at any time;
-                  c()/qc()/span() give the active theme's colours; mono_font(); 'system' = desktop's own style
+                  c()/qc()/span() give the active theme's colours; mono_font(); 'system' = desktop's own style;
+                  TAGS / tag_qc() / tag_icon() = account colour tags (Account.color), dark + light shade each
   ui/
-    common.py     ui(fn) / bg(fn, *args, done=, err=) threading glue; widget helpers btn/chk/spin/combo/row/hint/group; ask/info/warn
-    main_window.py  MainWindow = AccountsMixin + LaunchMixin + LiveMixin + QMainWindow: __init__ (sidebar, pages,
-                  shortcuts, tray, timers), theme switch, startup(), window state, quit
+    common.py     ui(fn) / bg(fn, *args, done=, err=) threading glue; widget helpers btn/chk/spin/combo/row/hint/group; ask/info/warn;
+                  Dialog (base of every dialog, frees itself after exec) + popup(menu, pos) for one-off menus
+    main_window.py  MainWindow = AccountsMixin + LaunchMixin + LiveMixin + QMainWindow: __init__ (header, account
+                  list, tool tabs, log, shortcuts, tray, timers), show_page(), theme switch, startup(), quit
     accounts.py   AccountsMixin: account list (refresh / sort / selection), right-click menu, add / import / export /
-                  edit / remove accounts, account switcher, login check, avatars
+                  edit / remove accounts, account switcher, login check, avatars, main_account()
     launching.py  LaunchMixin: launch sequences (run_sequence on a worker), stop, Bring-here, website Play links,
                   run_command (CLI), join history / recent games
     live.py       LiveMixin: timers - status + usage, presence, watcher, Roblox-log tick, notifications, screen viewer
                   / wall, anti-AFK, update check / What's new / versions
-    widgets.py    page_frame(), MiniStat, PlayingAs, AccountTable + AccountCards (same proxy model AND the same
-                  selection model - selected_accounts() counts any selected cell), Toast, eyebrow(), _size()
-    library_page.py  LIBRARY: list on the left (favourites / recent / private servers), HeroTile + shelves, a game's
-                  GameView (home_page) shown inside it
-    profile_page.py  an account's profile (profiles.load: users / friends counts / groups public; Robux, Premium,
-                  badges with its own cookie), recent activity from settings.history
+    widgets.py    StatBlock (header numbers), AccountTable + AccountCards (same proxy model AND the same selection
+                  model - selected_accounts() counts any selected cell; drag to reorder), Toast, graphs, eyebrow()
     palette.py    Ctrl+K command palette: commands(mw) builds the list each time, score() = word-prefix match
     accounts_model.py  QAbstractTableModel + filter proxy for the account list (status column from LiveInfo + running set)
-    dialogs.py    Text/Paste/Password dialogs, EditAccountDialog, BulkEditDialog, GamePicker, ServerTable/ServerPicker
-    launch_pages.py  LaunchPage (game/job/private/follow form), ServersPage
-    friends_page.py, windows_page.py (KWin grid + preview), presets_page.py, macros_page.py,
-    settings_pages.py (PerfPage, SettingsPage via _Bound binding helper, HelpPage HTML),
+    dialogs.py    Text/Paste/Password dialogs, EditAccountDialog, BulkEditDialog, GamePicker (search by name),
+                  ServerTable/ServerPicker (+ Quick join: emptiest / busy with room for `need` accounts)
+    launch_pages.py  LaunchPage = the Launch tab: mode tabs Game / Server / Private server / Friend (rb_game /
+                  rb_job / rb_private / rb_follow are checkable buttons) over a QStackedWidget; GameStrip = "Your
+                  games" tile grid (painted by _TileDelegate; recent + main account's favourites; search field takes
+                  words or a link); the chosen game is set_place() / place_text(); the launch bar button text says
+                  what happens (update_launch_text). LaunchQueue, HistoryDialog, play_menu() = the shared "Play
+                  with..." menu (selected / main / groups / normal Sober)
+    windows_page.py (KWin grid + preview), presets_page.py, macros_page.py,
+    settings_pages.py (PerfPage, AutomationSettings = watcher + anti-AFK, SettingsPage via _Bound binding helper,
+                  HelpPage HTML),
     screen_viewer.py (live VNC view of a background account, input, macro recording),
     browser_login.py (QtWebEngine off-the-record login / sign-up; grabs .ROBLOSECURITY cookie)
-    home_page.py  Home tab: painted GameCard / FriendChip in horizontal Shelf rows, GameDialog (game page),
-                  play_menu() = the shared "Play with..." menu (selected / home account / groups / normal Sober)
     setup_wizard.py  first-run SetupWizard (theme, system checks with Copy buttons, add accounts) + SystemCheckDialog
     my_sober_page.py "My Sober" tab: the user's NORMAL Sober - config.json options, FPS cap, Fast Flag table
                   (allowlist column), repair (clear caches / crash dumps, reset config)
 ```
 
-Layout (main_window), like a game launcher: a top bar (back / forward with history + Alt+Left/Right + mouse
-buttons, big section tabs HOME · LIBRARY · ACCOUNTS · FRIENDS · TOOLS▾, then update button, Settings / Help /
-Activity icons and `AccountChip` = the Home account) + a QStackedWidget still called `self.tabs` (switch with
-`show_page(page)`) + a bottom bar (+ Add account, `status_line` = newest log line, `MiniStat` running / CPU /
-memory, multi-instance pill, compact `PlayingAs` = selection, Friends · N online). `nav_items` entries are
-(name, icon, page, "main" | "tools" | "corner" | "hidden"). Pages: Home, Library, Accounts (list + LaunchPage in
-`self.hsplit`), Friends, Servers, Presets, Macros, Windows, Performance, My Sober, Settings, Help, Activity,
-Profile (hidden: `show_profile(a)`). Titles via `page_frame()`. Icons: bundled Lucide SVGs (cellar/data/icons) via
-`theme.icon(name, token)`; `btn(icon=...)` only takes those names. UI size = QT_SCALE_FACTOR set in app.py before
-the QApplication (setting `ui_scale`, "auto" uses `auto_scale` measured at the previous start).
+Layout (main_window) = the Roblox MultiHub layout, fixed by DESIGN.md (read it before UI work; decided
+2026-11-24 after a game-launcher and a section layout were tried and dropped): a header (`topbar`: brand,
+`StatBlock` running / CPU / memory, update button, multi-instance pill `st_multi`); `self.vsplit` = top part +
+the log (`logbox`: filter / search / Copy / Open / Clear over `logview`); top part `self.hsplit` = the account list
+(`self.accounts_page`, always on screen; Add / Edit / Remove / Details / Launch / Stop / Stop all) + `self.tabs`
+(QTabWidget of `tab_pages`: Launch, Presets, Macros, Anti-AFK & rejoin, Windows, My Sober, Performance, Settings,
+Help; Ctrl+1..9). Cellar opens on Launch. `show_page(page)` opens the tab a page is on; check "is this page
+showing" with `page.isVisible()`. `goto_items` = what Ctrl+K can open. Tab labels need `&&` for "&". Icons:
+bundled Lucide SVGs (cellar/data/icons) via `theme.icon(name, token)`; `btn(icon=...)` only takes those names.
+UI size = QT_SCALE_FACTOR set in app.py before the QApplication (setting `ui_scale`, "auto" uses `auto_scale`
+measured at the previous start). Cellar sits next to roblox.com + RoValra: no website-browsing pages.
 
 ## Key mechanisms (know these before changing launch code)
 
@@ -159,6 +168,12 @@ the QApplication (setting `ui_scale`, "auto" uses `auto_scale` measured at the p
   with `bg(fn, *args, done=..., err=...)`; `done` runs on the UI thread. From worker threads touch Qt only via
   `ui(lambda: ...)`. `log.write` / `mw.log` are thread-safe. Exceptions: kwin.py and antiafk.py run on the UI
   thread (they spin a local QEventLoop).
+- **Menus and dialogs free themselves** (else each one stays a child of its parent until Cellar quits - measured):
+  one-off menus are a plain `QMenu(parent)` shown with `common.popup(m, pos)` (exec, then deleteLater); dialogs
+  subclass `common.Dialog` (exec() frees it afterwards; reading `d.x` right after exec() is fine). Never subclass
+  QMenu (exec() on a Python QMenu subclass segfaults in PySide 6.12) and don't use WA_DeleteOnClose / aboutToHide
+  for this (a dialog popping up over an open menu would free it inside a nested loop). Non-modal windows
+  (ScreenViewer / ScreenWall) call deleteLater() at the end of done(); look them up with `shiboken6.isValid`.
 - **Logging style**: per-account messages are `f"[{a.name}] ..."` (`who` prefix in launcher). Plain, friendly
   English sentences that tell the user what to do next. No jargon in user-facing text; the same tone in README/HELP.
 - **Adding a setting**: add a field with a default to `AppSettings` (or Gfx/Sober/Layout settings) in models.py —
@@ -177,7 +192,7 @@ the QApplication (setting `ui_scale`, "auto" uses `auto_scale` measured at the p
   `eyebrow`, `stat_value`, `log`...) and properties (`primary` on buttons via `btn(primary=True)`; pill `state`
   + `theme.repolish(w)`). Things that cache colours must refresh in `MainWindow.apply_theme`. Style-sheet
   padding does not reach a spin box's text; theme.py's `_SpinPadding` event filter handles that.
-- Roadmap / feature checklist: ROADMAP.md (tick items off when done).
+- Roadmap / feature checklist: ROADMAP.md (tick items off when done). UI rules and the fixed layout: DESIGN.md.
 - When a feature is user-visible, also update the **HELP** HTML in `ui/settings_pages.py` and **README.md**.
 - Code comments explain *why* (measured numbers, Sober/Wayland quirks); keep that style, keep lines ≤ ~120 chars.
 - New module inside `cellar/` or `cellar/ui/` needs no packaging change; a new sub-package must be added to

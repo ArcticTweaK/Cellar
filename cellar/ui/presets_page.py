@@ -5,12 +5,12 @@ import time
 from typing import Optional
 
 from PySide6.QtCore import Qt, QTimer
-from PySide6.QtWidgets import (QDialog, QAbstractItemView, QComboBox, QHeaderView, QInputDialog, QLineEdit, QTreeWidget,
+from PySide6.QtWidgets import (QAbstractItemView, QComboBox, QHeaderView, QInputDialog, QLineEdit, QTreeWidget,
                                QTreeWidgetItem, QVBoxLayout, QWidget)
 
 from .. import sober, specs, store, util
 from ..models import LaunchSpec, Preset, PresetEntry, PresetSettings
-from .common import ask, bg, btn, chk, group, hint, row
+from .common import Dialog, ask, bg, btn, chk, group, hint, row
 from .dialogs import TextDialog
 
 
@@ -251,7 +251,7 @@ class PresetsPage(QWidget):
             return
         lines = [f"Preset: {p.name}", f"Saved: {util.ago(p.saved)}", ""]
         for e in p.entries:
-            where = e.spec.describe() if e.spec else "own game / Accounts page"
+            where = e.spec.describe() if e.spec else "own game / Launch tab"
             rect = f"  window {e.x},{e.y} {e.w}x{e.h}" + (" borderless" if e.borderless else "") if e.has_rect else ""
             lines.append(f"{e.grid_index + 1}. {self.entry_name(e)}: {where}{rect}" + ("" if e.include else "  (not in grid)"))
         s = p.settings
@@ -303,7 +303,7 @@ class PresetsPage(QWidget):
                 if spec is None:
                     spec = specs.saved_spec(a) or specs.resolve_form(form, a, mw.log)
                 if spec is None:
-                    mw.log(f"[{a.name}] skipped - no game saved for it and none on the Accounts page.")
+                    mw.log(f"[{a.name}] skipped - no game saved for it and none on the Launch tab.")
                     continue
                 if spec.kind == "Private" and spec.share_code and not spec.link_code:
                     if not specs.resolve_saved_share(a, spec, mw.log):
@@ -344,7 +344,7 @@ class PresetsPage(QWidget):
             grid.arrange()
 
 
-class ScheduleDialog(QDialog):
+class ScheduleDialog(Dialog):
     def __init__(self, parent, sc):
         super().__init__(parent)
         from PySide6.QtCore import QTime

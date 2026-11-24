@@ -86,6 +86,54 @@ def span(token: str, text: str) -> str:
     return f"<span style='color:{c(token)}'>{text}</span>"
 
 
+# ---------------------------------------------------------------- colour tags (Account.color)
+# key -> (label, on dark themes, on light themes). The same eight on every theme, so a tag means the same thing
+# whichever theme you pick; the light-theme shades are deeper so they still stand out on white.
+TAGS: Dict[str, tuple] = {
+    "red": ("Red", "#f2626b", "#d93644"),
+    "orange": ("Orange", "#f59a4a", "#d9741f"),
+    "yellow": ("Yellow", "#f2cf4a", "#c79a00"),
+    "green": ("Green", "#5fd38a", "#22a356"),
+    "teal": ("Teal", "#4fd1c5", "#16998e"),
+    "blue": ("Blue", "#5b9cf5", "#2f6fd6"),
+    "purple": ("Purple", "#a98bf5", "#7a52db"),
+    "pink": ("Pink", "#f07ac0", "#d1449b"),
+}
+_tag_icons: Dict[tuple, QIcon] = {}
+
+
+def tag_qc(key: str) -> Optional[QColor]:
+    """An account's colour tag in the active theme, None for no tag."""
+    t = TAGS.get(key)
+    if not t:
+        return None
+    return QColor(t[1] if qc("surface").lightness() < 128 else t[2])
+
+
+def tag_icon(key: str) -> QIcon:
+    """A round swatch of a colour tag (menus, combo boxes); an empty ring for 'no tag'."""
+    from PySide6.QtCore import Qt
+    from PySide6.QtGui import QPainter, QPen, QPixmap
+    col = tag_qc(key)
+    ck = (key, col.name() if col else c("muted"))
+    ic = _tag_icons.get(ck)
+    if ic is None:
+        pm = QPixmap(32, 32)
+        pm.fill(Qt.transparent)
+        p = QPainter(pm)
+        p.setRenderHint(QPainter.Antialiasing)
+        if col:
+            p.setPen(Qt.NoPen)
+            p.setBrush(col)
+        else:
+            p.setPen(QPen(qc("muted"), 2.5))
+            p.setBrush(Qt.NoBrush)
+        p.drawEllipse(5, 5, 22, 22)
+        p.end()
+        ic = _tag_icons[ck] = QIcon(pm)
+    return ic
+
+
 # ---------------------------------------------------------------- colour maths
 def _mix(a: str, b: str, t: float) -> str:
     """a blended toward b by t (0..1)."""
@@ -207,26 +255,12 @@ QPushButton#topnav { background: transparent; border: none; border-bottom: 3px s
                      color: $muted; font-size: 12pt; font-weight: 700; padding: 10px 14px 9px 14px; }
 QPushButton#topnav:hover { color: $text; }
 QPushButton#topnav:checked { color: $text; border-bottom: 3px solid $accent; }
-QPushButton#navarrow, QPushButton#corner { background: transparent; border: none; border-radius: 8px; padding: 6px; }
-QPushButton#navarrow:hover, QPushButton#corner:hover { background: $nav_hover; }
+QPushButton#corner { background: transparent; border: none; border-radius: 8px; padding: 6px; }
+QPushButton#corner:hover { background: $nav_hover; }
 QPushButton#corner:checked { background: $nav_on; }
-QFrame#pcard { background: $surface; border: 1px solid $border; border-radius: 14px; }
-QLabel#bigavatar { background: $raised; border-radius: 12px; }
-QListWidget#liblist { background: transparent; border: none; }
-QListWidget#liblist::item { padding: 4px 6px; border-radius: 6px; }
-QListWidget#liblist::item:selected { background: $nav_on; }
-QPushButton#libhome, QPushButton#libback { background: transparent; border: none; text-align: left;
-                                           padding: 6px 8px; font-weight: 600; }
-QPushButton#libhome:hover, QPushButton#libback:hover { background: $nav_hover; border-radius: 8px; }
 QWidget#bottombar { background: $side; border-top: 1px solid $border; }
 QPushButton#barbtn { background: transparent; border: none; color: $muted; padding: 5px 8px; font-weight: 600; }
 QPushButton#barbtn:hover { color: $text; background: $nav_hover; border-radius: 6px; }
-QWidget#sidebar { background: $side; border-right: 1px solid $border; }
-QPushButton#nav { text-align: left; padding: 7px 10px; border: none; border-radius: 8px; background: transparent;
-                  color: $muted; font-weight: 500; }
-QPushButton#nav:hover { background: $nav_hover; color: $text; }
-QPushButton#nav:checked { background: $nav_on; color: $text; font-weight: 600; }
-QWidget#side_foot { background: $bg; border: 1px solid $border; border-radius: 10px; }
 QLabel#mini_value { color: $text; font-weight: 600; }
 QLabel#page_title { font-size: 19pt; font-weight: 700; color: $text; }
 QLabel#page_sub { color: $muted; }
@@ -235,6 +269,14 @@ QPushButton#statusline:hover { color: $text; }
 QLabel#brand { font-size: 15pt; font-weight: 700; color: $text; }
 QPushButton#seg { padding: 4px 11px; }
 QPushButton#seg:checked { background: $nav_on; color: $text; border-color: $accent; }
+QPushButton#modetab { background: transparent; border: 1px solid transparent; border-radius: 8px; color: $muted;
+                      font-weight: 600; padding: 5px 14px; }
+QPushButton#modetab:hover { color: $text; background: $nav_hover; }
+QPushButton#modetab:checked { color: $text; background: $nav_on; border-color: $accent; }
+QWidget#launchbar { background: $surface; border: 1px solid $border; border-radius: 14px; }
+QPushButton#launchbtn { font-size: 11pt; font-weight: 700; padding: 6px 18px; }
+QListView#gametiles { background: transparent; border: none; }
+QListView#gametiles::item, QListView#gametiles::item:selected, QListView#gametiles::item:hover { background: transparent; }
 QListView#cards { background: transparent; border: none; }
 QListView#cards::item, QListView#cards::item:selected, QListView#cards::item:hover { background: transparent; }
 QDialog#palette { background: $raised; border: 1px solid $border; border-radius: 12px; }

@@ -7,11 +7,12 @@ from typing import Callable, List, Optional
 
 from PySide6.QtCore import QObject, QPoint, QRect, Qt, Signal
 from PySide6.QtGui import QColor, QImage, QPainter
-from PySide6.QtWidgets import (QCheckBox, QDialog, QHBoxLayout, QInputDialog, QLabel, QPushButton, QVBoxLayout,
+from PySide6.QtWidgets import (QCheckBox, QHBoxLayout, QInputDialog, QLabel, QPushButton, QVBoxLayout,
                                QWidget)
 
 from .. import background, log, macros, store
 from ..models import Instance, Macro
+from .common import Dialog
 
 _QT_KEYS = {
     Qt.Key_Space: "space", Qt.Key_Return: "enter", Qt.Key_Enter: "enter", Qt.Key_Escape: "esc", Qt.Key_Tab: "tab",
@@ -114,7 +115,7 @@ class Canvas(QWidget):
             self.on_event("up", n)
 
 
-class ScreenViewer(QDialog):
+class ScreenViewer(Dialog):
     def __init__(self, parent, inst: Instance, logf: Callable[[str], None], macros_changed: Callable[[], None]):
         super().__init__(parent)
         self.inst, self.logf, self.macros_changed = inst, logf, macros_changed
@@ -263,7 +264,7 @@ class ScreenViewer(QDialog):
         store.settings.macros.append(Macro(name=name, text=text + "wait 1000\n", loop=True))
         store.save_settings()
         self.macros_changed()
-        self.status.setText(f"Saved macro '{name}' - edit or run it on the Macros page.")
+        self.status.setText(f"Saved macro '{name}' - edit or run it in the Macros tab.")
         self.logf(f"Saved macro '{name}' ({len(events)} recorded actions).")
 
     def done(self, r):
@@ -279,6 +280,7 @@ class ScreenViewer(QDialog):
                     pass
             self.vnc.close()
         super().done(r)
+        self.deleteLater()          # shown, not exec()'d: free it (its last frame alone is 3.7 MB)
 
 
 class _Tile(QWidget):
@@ -371,7 +373,7 @@ class _Tile(QWidget):
                        Qt.AlignVCenter | Qt.AlignRight, badge)
 
 
-class ScreenWall(QDialog):
+class ScreenWall(Dialog):
     """Every background account's screen in one window. Click one to open it (watch, control, record)."""
 
     def __init__(self, mw):
@@ -434,3 +436,4 @@ class ScreenWall(QDialog):
         for t in self.tiles.values():
             t.stop()
         super().done(r)
+        self.deleteLater()

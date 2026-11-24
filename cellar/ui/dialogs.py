@@ -10,10 +10,10 @@ from PySide6.QtWidgets import (QAbstractItemView, QComboBox, QDialog, QDialogBut
 
 from .. import api, store, theme
 from ..models import Account
-from .common import bg, hint, spin
+from .common import Dialog, bg, hint, spin
 
 
-class TextDialog(QDialog):
+class TextDialog(Dialog):
     def __init__(self, parent, title: str, text: str, mono: bool = True):
         super().__init__(parent)
         self.setWindowTitle(title)
@@ -34,7 +34,7 @@ class TextDialog(QDialog):
         self.edit.setPlainText(t)
 
 
-class ReleaseNotesDialog(QDialog):
+class ReleaseNotesDialog(Dialog):
     """Release notes (GitHub Markdown) for "New version" and "What's new"."""
 
     def __init__(self, parent, title: str, notes: str, url: str, how: str = ""):
@@ -57,7 +57,7 @@ class ReleaseNotesDialog(QDialog):
         v.addWidget(bb)
 
 
-class PasteDialog(QDialog):
+class PasteDialog(Dialog):
     """Multi-line input (cookies, username:password lines)."""
 
     def __init__(self, parent, title: str, explain: str, placeholder: str = ""):
@@ -78,7 +78,7 @@ class PasteDialog(QDialog):
         return self.edit.toPlainText()
 
 
-class PasswordDialog(QDialog):
+class PasswordDialog(Dialog):
     def __init__(self, parent, title: str, prompt: str, confirm: bool):
         super().__init__(parent)
         self.setWindowTitle(title)
@@ -115,7 +115,17 @@ class PasswordDialog(QDialog):
         return d.p1.text() if d.exec() == QDialog.Accepted else None
 
 
-class EditAccountDialog(QDialog):
+def tag_combo(current: str) -> QComboBox:
+    """Picks a colour tag (theme.TAGS) - Edit account and Bulk edit."""
+    cb = QComboBox()
+    cb.addItem(theme.tag_icon(""), "None", "")
+    for key, (label, *_) in theme.TAGS.items():
+        cb.addItem(theme.tag_icon(key), label, key)
+    cb.setCurrentIndex(max(0, cb.findData(current)))
+    return cb
+
+
+class EditAccountDialog(Dialog):
     def __init__(self, parent, a: Account):
         super().__init__(parent)
         self.a = a
@@ -132,6 +142,8 @@ class EditAccountDialog(QDialog):
         self.group.addItems(store.all_groups())
         self.group.setCurrentText(a.group)
         f.addRow("Group", self.group)
+        self.color = tag_combo(a.color)
+        f.addRow("Colour tag", self.color)
         self.game = QLineEdit(a.game_link or a.saved_place_id)
         self.game.setPlaceholderText("Place ID, game link or private server link (optional)")
         f.addRow("Own game", self.game)
@@ -142,13 +154,13 @@ class EditAccountDialog(QDialog):
         f.addRow("FPS cap", self.fps)
         self.full = QCheckBox("Full quality - this is my main")
         self.full.setChecked(a.full_quality)
-        self.full.setToolTip("Skips the alt settings (global FPS cap and graphics preset in Settings > Performance):\n"
+        self.full.setToolTip("Skips the alt settings (global FPS cap and graphics preset in the Performance tab):\n"
                              "this account runs with Roblox's own graphics and your normal Sober's FPS cap,\n"
                              "unless you give it its own FPS cap above.")
         f.addRow("", self.full)
         from .. import gfx
         self.gfx = QComboBox()
-        self.gfx.addItem("Default (Performance page, or full quality for your main)", "")
+        self.gfx.addItem("Default (the Performance tab, or full quality for your main)", "")
         for k in gfx.PRESETS:
             if k != "Custom":
                 self.gfx.addItem(gfx.PRESET_LABELS[k], k)
@@ -191,6 +203,7 @@ class EditAccountDialog(QDialog):
         from ..util import parse_place_id
         a.alias = self.alias.text().strip()
         a.group = self.group.currentText().strip()
+        a.color = self.color.currentData() or ""
         link = self.game.text().strip()
         a.game_link = link
         pid = parse_place_id(link)
@@ -211,7 +224,7 @@ class EditAccountDialog(QDialog):
         return changed
 
 
-class BulkEditDialog(QDialog):
+class BulkEditDialog(Dialog):
     def __init__(self, parent, accs: List[Account]):
         super().__init__(parent)
         self.setWindowTitle(f"Edit {len(accs)} accounts")
@@ -222,6 +235,8 @@ class BulkEditDialog(QDialog):
         self.group.addItem("")
         self.group.addItems(store.all_groups())
         f.addRow(self.c_group, self.group)
+        self.c_color, self.color = QCheckBox("Colour tag"), tag_combo("")
+        f.addRow(self.c_color, self.color)
         self.c_game, self.game = QCheckBox("Own game"), QLineEdit()
         self.game.setPlaceholderText("Place ID / link, empty = none")
         f.addRow(self.c_game, self.game)
@@ -244,7 +259,8 @@ class BulkEditDialog(QDialog):
         self.group.currentTextChanged.connect(lambda *_: self.c_group.setChecked(True))
         self.game.textChanged.connect(lambda *_: self.c_game.setChecked(True))
         self.fps.valueChanged.connect(lambda *_: self.c_fps.setChecked(True))
-        for c, w in ((self.c_bg, self.bg), (self.c_full, self.full), (self.c_macro, self.macro)):
+        for c, w in ((self.c_color, self.color), (self.c_bg, self.bg), (self.c_full, self.full),
+                     (self.c_macro, self.macro)):
             w.currentIndexChanged.connect(lambda *_, c=c: c.setChecked(True))
         bb = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
         bb.accepted.connect(self.accept)
@@ -256,6 +272,8 @@ class BulkEditDialog(QDialog):
         for a in accs:
             if self.c_group.isChecked():
                 a.group = self.group.currentText().strip()
+            if self.c_color.isChecked():
+                a.color = self.color.currentData() or ""
             if self.c_game.isChecked():
                 a.game_link = self.game.text().strip()
                 pid = parse_place_id(a.game_link)
@@ -271,10 +289,10 @@ class BulkEditDialog(QDialog):
                 a.auto_macro = self.macro.currentData() or ""
 
 
-class GamePicker(QDialog):
+class GamePicker(Dialog):
     """Search a game by name."""
 
-    def __init__(self, parent, cookie: Optional[str]):
+    def __init__(self, parent, cookie: Optional[str], query: str = ""):
         super().__init__(parent)
         self.cookie = cookie
         self.result: Optional[api.GameInfo] = None
@@ -299,6 +317,9 @@ class GamePicker(QDialog):
         bb.accepted.connect(self._pick)
         bb.rejected.connect(self.reject)
         v.addWidget(bb)
+        if query:
+            self.q.setText(query)
+            self.search()
 
     def search(self):
         q = self.q.text().strip()
@@ -369,14 +390,22 @@ class ServerTable(QTableWidget):
         return self.item(r, 3).text()
 
 
-class ServerPicker(QDialog):
-    def __init__(self, parent, place_id: int, cookie: Optional[str]):
+class ServerPicker(Dialog):
+    """A game's public servers: pick one, or Quick join - the emptiest server, or the busiest one that still has
+    room for all `need` accounts you send."""
+
+    def __init__(self, parent, place_id: int, cookie: Optional[str], need: int = 1):
         super().__init__(parent)
-        self.place_id, self.cookie, self.cursor = place_id, cookie, ""
+        self.place_id, self.cookie, self.cursor, self.need = place_id, cookie, "", max(1, need)
         self.result: Optional[str] = None
+        self.servers: List[api.ServerInfo] = []
         self.setWindowTitle(f"Servers of place {place_id}")
-        self.resize(640, 480)
+        self.resize(640, 500)
         v = QVBoxLayout(self)
+        self.game = QLabel("")
+        self.game.setObjectName("page_sub")
+        v.addWidget(self.game)
+        bg(api.place_name, place_id, done=lambda n: n and self.game.setText(n))
         h = QHBoxLayout()
         self.order = QComboBox()
         self.order.addItem("Most players first", False)
@@ -388,6 +417,18 @@ class ServerPicker(QDialog):
         h.addStretch(1)
         h.addWidget(more)
         v.addLayout(h)
+        q = QHBoxLayout()
+        q.addWidget(QLabel(f"Quick join ({self.need} account{'s' if self.need > 1 else ''}):"))
+        for text, mode, tip in (("Emptiest server", "empty", "The server with the fewest players that still has "
+                                                             "room for everyone you send"),
+                                ("Busy server with room", "busy", "The fullest server that still has a free slot "
+                                                                  "for each account you send")):
+            b = QPushButton(text)
+            b.setToolTip(tip)
+            b.clicked.connect(lambda _=False, mode=mode: self.quick(mode))
+            q.addWidget(b)
+        q.addStretch(1)
+        v.addLayout(q)
         self.table = ServerTable()
         self.table.doubleClicked.connect(lambda *_: self._pick())
         v.addWidget(self.table)
@@ -399,7 +440,7 @@ class ServerPicker(QDialog):
         v.addWidget(bb)
         self.load(False)
 
-    def load(self, more: bool):
+    def load(self, more: bool, then=None):
         if more and not self.cursor:
             self.status.setText("No more servers.")
             return
@@ -410,9 +451,27 @@ class ServerPicker(QDialog):
                 self.status.setText(sp.error)
                 return
             self.cursor = sp.next
+            self.servers = (self.servers if more else []) + sp.servers
             self.table.fill(sp.servers, append=more)
             self.status.setText(f"{self.table.rowCount()} server(s)" + ("  ·  more available" if sp.next else ""))
+            if then:
+                then()
         bg(api.servers, self.place_id, bool(self.order.currentData()), self.cursor if more else "", self.cookie, done=done)
+
+    def quick(self, mode: str, loaded: bool = False):
+        want_asc = mode == "empty"
+        if not loaded and (bool(self.order.currentData()) != want_asc or not self.servers):
+            self.order.blockSignals(True)
+            self.order.setCurrentIndex(self.order.findData(want_asc))
+            self.order.blockSignals(False)
+            return self.load(False, then=lambda: self.quick(mode, loaded=True))
+        fits = [x for x in self.servers if x.max - x.playing >= self.need]
+        if not fits:
+            self.status.setText(f"No loaded server has {self.need} free slot(s) - press Load more.")
+            return
+        pick = min(fits, key=lambda x: x.playing) if want_asc else max(fits, key=lambda x: x.playing)
+        self.result = pick.id
+        self.accept()
 
     def _pick(self):
         j = self.table.selected_job()
@@ -421,7 +480,7 @@ class ServerPicker(QDialog):
             self.accept()
 
 
-class PlayLinkDialog(QDialog):
+class PlayLinkDialog(Dialog):
     """A "Play" link from the website: join with Cellar accounts, or hand it to your normal Sober."""
 
     def __init__(self, parent, spec, selected_ids):
@@ -469,7 +528,7 @@ class PlayLinkDialog(QDialog):
         return [a for a in store.accounts if a.id in ids]
 
 
-class RestoreBackupDialog(QDialog):
+class RestoreBackupDialog(Dialog):
     """Pick one of the automatic backups of the accounts file (last 10) and see what is in it first."""
 
     def __init__(self, parent):

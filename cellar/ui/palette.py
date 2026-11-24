@@ -1,23 +1,24 @@
 """Command palette (Ctrl+K): type a few letters of anything Cellar can do and press Enter.
 
     "lau alt2"  -> Launch alt2         "stop all" -> Stop all          "mint" -> Theme: Mint
-    "serv"      -> Go to Servers       "adopt"    -> Play Adopt Me!    (anything else -> search games on Home)
+    "mac"       -> Go to Macros        "adopt"    -> Play Adopt Me!    (anything else -> search a game to launch)
 """
 
 from typing import Callable, List, Tuple
 
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QDialog, QLineEdit, QListWidget, QListWidgetItem, QStyledItemDelegate, QVBoxLayout
+from PySide6.QtWidgets import QLineEdit, QListWidget, QListWidgetItem, QStyledItemDelegate, QVBoxLayout
 
 from .. import store, theme
 from ..models import LaunchSpec
+from .common import Dialog
 
 Command = Tuple[str, str, Callable[[], None]]       # title, hint (right side), action
 
 
 def commands(mw) -> List[Command]:
     out: List[Command] = []
-    for name, _, page, _ in mw.nav_items:
+    for name, page in mw.goto_items:
         out.append((f"Go to {name}", "page", lambda page=page: mw.show_page(page)))
     sel = mw.selected_accounts()
     if sel:
@@ -33,10 +34,10 @@ def commands(mw) -> List[Command]:
         out.append((f"Launch group {g} ({len(accs)})", "group", lambda accs=accs: mw.start_launch(accs)))
     for p in store.settings.presets:
         out.append((f"Run preset {p.name}", "preset", lambda p=p: mw.presets_page.run(p)))
-    home = mw.home_page.home_account()
+    main = mw.main_account()
     for e in store.settings.recent[:15]:
         if e.name:
-            who = sel or ([home] if home else [])
+            who = sel or ([main] if main else [])
             out.append((f"Play {e.name}", "with " + (who[0].name if len(who) == 1 else f"{len(who)} accounts")
                         if who else "game",
                         lambda e=e, who=who: who and mw.start_launch(
@@ -87,7 +88,7 @@ class _Row(QStyledItemDelegate):
         return sz
 
 
-class Palette(QDialog):
+class Palette(Dialog):
     def __init__(self, mw):
         super().__init__(mw, Qt.Popup | Qt.FramelessWindowHint)
         self.mw = mw
@@ -117,7 +118,7 @@ class Palette(QDialog):
         hits = [(score(t, q) if q else 1, t, h, fn) for t, h, fn in self.cmds]
         hits = sorted((x for x in hits if x[0] > 0), key=lambda x: -x[0])[:40]
         if q and len(q) > 1:
-            hits.append((0, f"Search games for “{q}”", "Home", lambda q=q: self._search(q)))
+            hits.append((0, f"Search games for “{q}”", "launch", lambda q=q: self._search(q)))
         for _, t, h, fn in hits:
             it = QListWidgetItem(f"{t}")
             it.setData(Qt.UserRole, fn)
@@ -134,9 +135,8 @@ class Palette(QDialog):
         super().keyPressEvent(ev)
 
     def _search(self, q: str):
-        self.mw.show_page(self.mw.home_page)
-        self.mw.home_page.search.setText(q)
-        self.mw.home_page.do_search()
+        self.mw.show_page(self.mw.launch_page)
+        self.mw.launch_page.search_game(q)
 
     def run(self):
         it = self.list.currentItem()

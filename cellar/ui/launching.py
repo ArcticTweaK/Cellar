@@ -78,9 +78,12 @@ class LaunchMixin:
         store.save_settings()
 
     def open_servers(self, place_id: int):
-        self.servers_page.place.setText(str(place_id))
-        self.show_page(self.servers_page)
-        self.servers_page.load(False)
+        """A game's servers: the Launch tab's server picker for it (Server)."""
+        lp = self.launch_page
+        lp.set_place(place_id)
+        lp.rb_job.setChecked(True)
+        self.show_page(lp)
+        lp.pick_server()
 
     def bring_here(self, leader: Account, accs: List[Account]):
         """'Bring my alts here': accounts join the exact server another account is in. Its server comes from its
@@ -225,7 +228,7 @@ class LaunchMixin:
                 cancel.wait(max(0, s.launch_delay_sec))
         ui(lambda c=cancel.is_set(): q.finish(c))
         self.log("Launch cancelled." if cancel.is_set() else
-                 "Launch sequence finished." + (f" {failed} account(s) failed - Retry failed on the Accounts page."
+                 "Launch sequence finished." + (f" {failed} account(s) failed - Retry failed on the Launch tab."
                                                 if failed else ""))
         started = len(accs) - failed
         text = (f"Launched {started} of {len(accs)} account(s)" if failed else f"Launched {len(accs)} account(s)") \

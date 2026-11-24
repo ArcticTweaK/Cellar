@@ -272,7 +272,7 @@ def reset_profile(a: Account) -> None:
 
 # ---------------------------------------------------------------- per-profile settings
 _HEADER = ("// Managed by Cellar for one account. Changes here are overwritten on the next launch;\n"
-           "// use the Performance page of Cellar instead.\n")
+           "// use the Performance tab in Cellar instead.\n")
 
 
 def read_sober_config(app: Path) -> dict:

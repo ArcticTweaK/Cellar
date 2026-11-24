@@ -69,13 +69,13 @@ class LiveMixin:
             return
         res = self.sampler.sample_each({i.account.id: usage.groups_for([i]) for i in alive})
         cores, mem = res.pop("")
-        if cores is not None:                       # Performance > Last hour
+        if cores is not None:                       # the Performance tab > Last hour
             now = time.time()
             self.perf_page.g_cpu.add(now, cores / (os.cpu_count() or 1) * 100)
             self.perf_page.g_mem.add(now, mem)
         self.model.usage = res
         alts = [m for i in alive if not i.account.full_quality and (m := res.get(i.account.id, (0, 0))[1]) > 2**28]
-        if self.tabs.currentWidget() is self.perf_page:
+        if self.perf_page.isVisible():
             self.perf_page.update_fit(sum(alts) // len(alts) if alts else 2**30, bool(alts))
         ncpu = os.cpu_count() or 1
         if cores is None:
@@ -90,7 +90,7 @@ class LiveMixin:
             self.update_usage(alive)
         try:
             self.windows_page.auto_tick()
-            if self.isVisible() and self.tabs.currentWidget() is self.windows_page:
+            if self.windows_page.isVisible():
                 self.windows_page.refresh()
         except Exception as ex:
             log.error("tick", ex)
@@ -128,11 +128,12 @@ class LiveMixin:
 
     def view_screen(self, inst: Instance):
         v = self.viewers.get(inst.account.id)
-        if v and v.isVisible() and v.inst is inst:
+        if v and shiboken6.isValid(v) and v.isVisible() and v.inst is inst:
             v.raise_()
             v.activateWindow()
             return
         v = ScreenViewer(self, inst, self.log, lambda: self.macros_page.load())
+        v.setWindowIcon(self.model.icon_for(inst.account))     # its headshot in the title bar / task bar
         self.viewers[inst.account.id] = v
         v.show()
 
@@ -167,9 +168,9 @@ class LiveMixin:
                                  stderr=subprocess.DEVNULL)
 
     def friends_tick(self):
-        """Every minute (setting notify_friends): friends of the Home account who came online or started a game.
+        """Every minute (setting notify_friends): friends of the main account who came online or started a game.
         The first check only remembers who is where, so turning it on does not announce everyone at once."""
-        a = self.home_page.home_account()
+        a = self.main_account()
         if not store.settings.notify_friends or not a or getattr(self, "_friends_busy", False):
             return
         self._friends_busy = True
@@ -289,7 +290,7 @@ class LiveMixin:
 
     def open_screen_wall(self):
         w = getattr(self, "_wall", None)
-        if w is not None and w.isVisible():
+        if w is not None and shiboken6.isValid(w) and w.isVisible():
             w.raise_()
             w.activateWindow()
             return

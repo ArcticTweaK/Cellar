@@ -7,11 +7,11 @@ import subprocess
 
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QGuiApplication
-from PySide6.QtWidgets import (QCheckBox, QDialog, QFrame, QGridLayout, QHBoxLayout, QLabel, QLineEdit, QPlainTextEdit, QPushButton,
+from PySide6.QtWidgets import (QCheckBox, QFrame, QGridLayout, QHBoxLayout, QLabel, QLineEdit, QPlainTextEdit, QPushButton,
                                QStackedWidget, QVBoxLayout, QWidget)
 
 from .. import APP_NAME, requirements, sober, store, theme
-from .common import bg, btn, hint
+from .common import Dialog, bg, btn, hint
 
 
 def _title(text: str) -> QLabel:
@@ -56,7 +56,7 @@ class _CheckRow(QFrame):
         g.setColumnStretch(1, 1)
 
 
-class SetupWizard(QDialog):
+class SetupWizard(Dialog):
     def __init__(self, mw):
         super().__init__(mw)
         self.mw = mw
@@ -200,14 +200,16 @@ class SetupWizard(QDialog):
     def _done(self):
         w, v = self._page("You're set", "")
         tips = [
-            ("Play", "Pick a game on Home and press <b>Play</b>, or open <b>Accounts</b>, select accounts (Ctrl / "
-                     "Shift for several), choose where they go and press <b>Launch selected</b>."),
+            ("Play", "On <b>Accounts</b>, select accounts (Ctrl / Shift for several), pick a game (Your games or "
+                     "Search game...) and press <b>Launch selected</b>. Or press Play on roblox.com - turn that on "
+                     "in Settings > Launching."),
             ("Background", "Right-click an account > Edit > <b>Run in the background</b> to run it on an invisible "
                            "screen - nothing appears on your desktop. Right-click > View screen to watch it."),
-            ("Presets", "Save a whole setup (accounts, games, window places) as a preset and start it in one click."),
+            ("Presets", "Save a whole setup (accounts, games, window places) as a preset and start it in one click "
+                        "(Automation)."),
             ("Stay safe", "Give every account a verified email and 2-step verification. Running several clients "
                           "and macros is against Roblox's rules - use your own accounts at your own risk."),
-            ("Help", "Help (in the sidebar) explains everything; Settings > System check shows what your computer has."),
+            ("Help", "Help (the ? at the top right) explains everything; Settings > System check shows what your computer has."),
         ]
         for t, d in tips:
             v.addWidget(hint(f"<b style='color: {theme.c('text')}'>{t}</b> &nbsp;{d}"))
@@ -246,7 +248,7 @@ class SetupWizard(QDialog):
         self.accept()
 
 
-class SystemCheckDialog(QDialog):
+class SystemCheckDialog(Dialog):
     """Settings > System check: what is missing (with the command to fix it) + a full report to copy."""
 
     def __init__(self, parent, mw, details: str):

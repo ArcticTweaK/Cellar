@@ -94,6 +94,7 @@ class Account:
     pinned: bool = False        # always at the top of the list
     volume: int = -1            # 0-100 %, -1 = default (Settings > Mute alts decides) - audio.py
     gfx_preset: str = ""        # its own graphics preset (gfx.PRESETS key), "" = the global one / full quality
+    color: str = ""             # colour tag (theme.TAGS key), "" = none
 
     @property
     def name(self) -> str:
@@ -170,7 +171,7 @@ class GameEntry:
 
 @dataclass
 class PrivateServer:
-    """A private server link saved on a game's page (Home > game > Your private servers)."""
+    """A saved private server link (Launch > Private server > Save...)."""
     place_id: int = 0
     name: str = ""
     link: str = ""
@@ -178,7 +179,7 @@ class PrivateServer:
 
 @dataclass
 class JoinRecord:
-    """One server an account joined (from its Roblox log) - Servers tab > History."""
+    """One server an account joined (from its Roblox log) - Launch > Server > History."""
     ts: float = 0.0
     account_id: str = ""
     account: str = ""
@@ -285,7 +286,7 @@ class Preset:
 
 @dataclass
 class Schedule:
-    """Run a preset at a time of day (and optionally stop its accounts later) - Presets page > Schedule."""
+    """Run a preset at a time of day (and optionally stop its accounts later) - Presets tab > Schedule."""
     preset: str = ""
     start: str = "18:00"            # HH:MM
     stop: str = ""                  # HH:MM, "" = leave them running
@@ -309,7 +310,7 @@ class AppSettings:
     accent: str = ""                # your own accent colour (#rrggbb) on Cellar's themes, "" = the theme's own
     ui_scale: str = "auto"          # auto | 90 | 100 | 115 | 130 | 150 (% - Qt scale factor, applied at start)
     auto_scale: float = 1.0         # what "auto" uses: picked from the screen size at the previous start
-    home_account: str = ""          # account id whose friends / favourites the Home tab shows ("" = your main)
+    home_account: str = ""          # Settings > Main account: whose friends / favourites the launch panel shows ("" = auto)
     check_updates: bool = True      # ask GitHub for a newer release, at most once a day
     last_update_check: float = 0.0
     last_seen_version: str = ""     # shows "What's new" once after an update
@@ -328,7 +329,7 @@ class AppSettings:
     # Alt defaults, measured 2026-11-23 on an i5-12600K: an alt in a game takes 0.82 CPU cores at
     # 240 FPS / default graphics and 0.17 at 30 FPS / "Lowest" - RAM (~1 GB each) becomes the limit.
     fps_cap: int = 30               # 0 = leave Roblox's own setting alone; accounts marked full_quality skip it
-    settings_version: int = 2       # 2 = alt performance defaults applied (see store.load_settings)
+    settings_version: int = 3       # 2 = alt performance defaults, 3 = MultiHub layout (see store.load_settings)
     auto_relaunch: bool = False
     watcher_sec: int = 60
     watcher_use_presence: bool = False
@@ -362,13 +363,14 @@ class AppSettings:
     check_logins_at_startup: bool = True
     start_minimized_to_tray: bool = False
     close_to_tray: bool = True
-    ui_tab: int = 0                 # remembered: last tab, account list sort and column widths
+    ui_tab: int = 0                 # unused since the tools layout (Cellar always opens on Accounts); kept for old files
     ui_sort: str = "Manual"
-    accounts_view: str = "cards"    # Accounts page: cards | table
+    accounts_view: str = "table"    # the account list: table | cards
     ui_header: str = ""             # QHeaderView.saveState(), base64
     win_w: int = 1360
     win_h: int = 820
     split: List[int] = field(default_factory=list)
+    split_v: List[int] = field(default_factory=list)    # main window: tools / log heights
     mute_alts: bool = False         # accounts not marked Full quality play without sound (unless given a volume)
     min_free_ram_mb: int = 0        # before each launch, wait (up to 3 min) while less RAM than this is free
     low_ram_close_mb: int = 0       # watcher: free RAM below this -> close the newest alt (not "full quality")
@@ -383,7 +385,7 @@ class AppSettings:
     notify_crash: bool = True
     notify_launch_done: bool = False
     notify_login_lost: bool = True
-    notify_friends: bool = False    # a friend of the Home account comes online / starts a game (checked every minute)
+    notify_friends: bool = False    # a friend of the main account comes online / starts a game (checked every minute)
     webhook: bool = False
     webhook_url: str = ""
     webhook_crash: bool = True

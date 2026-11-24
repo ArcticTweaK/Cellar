@@ -15,17 +15,19 @@ Made by ArcticTweaK · free and open source (GPL-3.0) · runs on [Sober](https:/
 Cellar is an account manager and multi-instance launcher for Roblox on Linux. Add your accounts once, launch as
 many as you want at the same time, and let them farm in the background while you keep using your PC.
 
+It sits next to roblox.com, not instead of it: browse and find games on the website (RoValra and your other
+extensions keep working there), press **Play**, and Cellar asks which of your accounts join and runs them.
+
 ## What it does
 
-- **Feels like a game launcher.** Big HOME · LIBRARY · ACCOUNTS · FRIENDS tabs, back / forward, a status bar,
-  and a size setting so text and buttons are easy to read (Settings > Appearance > Size).
-- **Library and profiles.** Your games in one place (recent, favourites, private servers) with a "jump back in"
-  tile, and a profile page for every account: avatar, Robux, Premium, friends, groups, badges and what it played.
-- **Home.** Everything you'd open the Roblox website for: search games, continue playing, see which friends are
-  online and join them, your favourites, and Roblox's popular and trending lists. Every game has a page with
-  **Play** - pick which account plays, or play in your normal Sober - and your saved private servers. Quick join
-  picks the emptiest server (or a busy one with room for all your accounts), and Cellar can tell you when a
-  friend starts playing, with a Join button.
+- **Everything on one screen.** Live numbers at the top, your accounts on the left, every tool one tab away
+  (Launch, Presets, Macros, Anti-AFK, Windows, My Sober, Performance, Settings, Help) and the log at the bottom -
+  the Roblox MultiHub layout, with themes and a size setting (Settings > Appearance).
+- **Launch in two clicks.** Select accounts, click a game in **Your games** (big tiles: what your accounts played
+  recently, or your main account's favourites) and press the launch button - it says exactly what will happen.
+  The Launch tab also has a **Server** (Quick join picks the emptiest one, or a busy one with room for everyone;
+  History rejoins one), a saved **Private server**, or a **Friend** - the list shows which friends are online and
+  what they play.
 - **Many accounts at once.** Sober normally allows one copy per PC. Cellar gives every account its own isolated
   Sober, and your normal Sober keeps working next to them.
 - **Background mode.** An account can run on its own invisible screen with its own mouse and keyboard. Nothing
@@ -39,8 +41,8 @@ many as you want at the same time, and let them farm in the background while you
 - **Screen wall.** Live pictures of every background account in one window; click one to take over.
 - **Kicks noticed in seconds.** Cellar reads each account's Roblox log: a kick or lost connection shows a desktop
   notification and can rejoin right away (the same server after a lost connection).
-- **Joining.** Join by game, private server link, server browser, or follow a friend from the Friends tab.
-  Right-click an account > **Bring accounts to its server** sends your alts into the exact server it is in.
+- **Joining together.** Right-click an account > **Bring accounts to its server** sends your alts into the exact
+  server it is in. Cellar can tell you when a friend starts playing, with a Join button.
 - **The website's Play button.** Turn it on in Settings and pressing Play on roblox.com asks which of your
   accounts should join that game, server or private server - or sends it on to your normal Sober.
 - **My Sober.** For your normal Sober too, even with one account: its settings in plain language, FPS cap,
@@ -56,7 +58,8 @@ many as you want at the same time, and let them farm in the background while you
 - **Easy start.** A short setup on first start checks your system and shows the exact install command for
   anything missing. Cellar tells you when a new version is out (once a day from GitHub; can be turned off).
 - **The rest:** window layouts (KDE Plasma, Hyprland, Sway), anti-AFK, presets, per-account FPS/graphics, a RAM limit per alt,
-  auto-relaunch when a window crashes or leaves the game, Discord webhooks, and encrypted accounts (your
+  colour tags and groups to tell accounts apart (right-click > **Colour tag**, filter the list by tag), drag accounts
+  to rearrange them, auto-relaunch when a window crashes or leaves the game, Discord webhooks, and encrypted accounts (your
   keyring or a password). If something goes wrong, Settings > System check > **Copy report** gives you a
   bug report with your cookies removed.
 
@@ -155,7 +158,7 @@ Control the running Cellar from a terminal, a script or a keyboard shortcut of y
 
 ```sh
 cellar list                                  # accounts and what they are doing
-cellar launch ArcticTweaK alt2               # each in its own game (or the one on the Launch page)
+cellar launch ArcticTweaK alt2               # each in its own game (or the one chosen on the Launch tab)
 cellar launch group:Farm --place 920587237   # a whole group into one game
 cellar launch all --job PLACE JOB_ID         # everyone into one exact server
 cellar preset "Evening farm"                 # run a saved preset
@@ -167,7 +170,7 @@ cellar stop all
 
 In the window: **Ctrl+K** opens the command palette (type a few letters of an account, page, preset, game or
 theme and press Enter), **Enter** launches the selected accounts, **F2** edits, **Ctrl+N** adds an account,
-**Ctrl+Shift+S** stops all, **Ctrl+1…0** switch pages, **Ctrl+F** searches, **F5** refreshes the status.
+**Ctrl+Shift+S** stops all, **Ctrl+1…9** switch tabs, **Ctrl+F** searches, **F5** refreshes the status.
 
 ## Measured numbers
 
@@ -220,7 +223,7 @@ verification. A cookie is a login: never share it or your `accounts.dat`.
 
 Made by **ArcticTweaK**. Cellar started as a Linux port of [Roblox MultiHub](https://github.com/Roblox-MultiHub/Roblox-MultiHub)
 (Windows, GPL-3.0) by the Roblox-MultiHub authors. It has been rewritten for Linux and Sober since, and has added
-background mode, macros, the Friends tab and the multi-instance sandbox.
+background mode, macros, automation and the multi-instance sandbox.
 
 GPL-3.0: free to use, change and share, as long as what you share stays open source under the same license.
 Not affiliated with Roblox Corporation or VinegarHQ (Sober).

@@ -12,6 +12,7 @@ from ..models import Account
 COLS = ["Account", "Group", "Status", "Usage", "Game", "Last used"]
 SORT_ROLE = Qt.UserRole + 1
 ACCOUNT_ROLE = Qt.UserRole + 2
+TAG_FILTER = "\x01tag:"     # group filter entries for colour tags ("\x01" can't be typed into a group name)
 
 # status colours = theme tokens (looked up when drawn, so a theme change shows at once)
 GOOD, WARN, BAD, DIM = "good", "warn", "bad", "muted"
@@ -115,6 +116,10 @@ class AccountModel(QAbstractTableModel):
             return COLS[section]
         return None
 
+    def flags(self, index):
+        f = super().flags(index)
+        return f | Qt.ItemIsDragEnabled if index.isValid() else f      # drag to reorder (widgets._DragReorder)
+
     def data(self, index, role=Qt.DisplayRole):
         if not index.isValid() or index.row() >= len(store.accounts):
             return None
@@ -170,7 +175,7 @@ class AccountFilter(QSortFilterProxyModel):
     def __init__(self):
         super().__init__()
         self.text = ""
-        self.group = None           # None = all groups, "" = no group
+        self.group = None           # None = all groups, "" = no group, TAG_FILTER + key = one colour tag
         self.setSortRole(SORT_ROLE)
 
     manual = True           # "Your order": the list's own order (pinned accounts still come first)
@@ -196,8 +201,12 @@ class AccountFilter(QSortFilterProxyModel):
         if source_row >= len(store.accounts):
             return False
         a = store.accounts[source_row]
-        if self.group is not None and a.group != self.group:
-            return False
+        if self.group is not None:
+            if self.group.startswith(TAG_FILTER):
+                if a.color != self.group[len(TAG_FILTER):]:
+                    return False
+            elif a.group != self.group:
+                return False
         if self.text:
             hay = " ".join([a.username, a.alias, a.display_name, a.group, a.description, str(a.user_id)]).lower()
             return self.text in hay

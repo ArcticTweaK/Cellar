@@ -1,18 +1,17 @@
-"""Games for the Home tab: discover lists, search, favourites, details and icons (cached on disk).
+"""Games for the launch panel's "Your games": recent places -> games, the main account's favourites, details
+(names, players) and icons (cached on disk). Finding new games is roblox.com's job; search is api.search_games.
 
-Blocking network calls - run them on a worker thread (ui.common.bg). The public endpoints here need no login;
-favourites and search use the account's cookie when one is given (private favourites, personalised search).
+Blocking network calls - run them on a worker thread (ui.common.bg). Favourites use the account's cookie when one
+is given (private favourites).
 """
 
 import json
 import os
 import threading
 import time
-import uuid
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, Iterable, List, Optional, Tuple
-from urllib.parse import quote
+from typing import Dict, Iterable, List, Optional
 
 from . import api, log, paths
 
@@ -21,9 +20,6 @@ ICON_DAYS = 7                   # game icons change rarely; refresh weekly
 _UNI_FILE = paths.CACHE_DIR / "place-universe.json"
 _uni: Dict[int, int] = {}       # place id -> universe id (never changes, kept on disk)
 
-# Roblox's own discover lists (explore-api sortId -> our title), in the order they are shown
-DISCOVER = [("top-playing-now", "Popular right now"), ("top-trending", "Trending"),
-            ("up-and-coming", "Up and coming"), ("fun-with-friends", "Fun with friends")]
 
 
 @dataclass
@@ -58,55 +54,6 @@ def short(n: int) -> str:
     return str(n)
 
 
-def _from_list_item(d: dict) -> Game:
-    return Game(universe_id=int(d.get("universeId") or 0), place_id=int(d.get("rootPlaceId") or 0),
-                name=d.get("name") or "", players=int(d.get("playerCount") or 0),
-                up=int(d.get("totalUpVotes") or 0), down=int(d.get("totalDownVotes") or 0),
-                description=d.get("description") or "", creator=d.get("creatorName") or "",
-                genre=d.get("genreL1") or "")
-
-
-# ---------------------------------------------------------------- lists
-def discover() -> List[Tuple[str, List[Game]]]:
-    """Roblox's public discover rows (no login needed)."""
-    out: List[Tuple[str, List[Game]]] = []
-    try:
-        r = api._req("GET", "https://apis.roblox.com/explore-api/v1/get-sorts?sessionId="
-                     f"{uuid.uuid4()}&device=computer&country=all")
-        if not r.ok:
-            log.write(f"Home: Roblox's game lists returned HTTP {r.status_code}.")
-            return out
-        sorts = {s.get("sortId"): s for s in r.json().get("sorts", [])}
-        for sid, title in DISCOVER:
-            games = [_from_list_item(g) for g in (sorts.get(sid) or {}).get("games") or []]
-            games = [g for g in games if g.place_id and g.universe_id]
-            if games:
-                out.append((title, games[:40]))
-    except Exception as ex:
-        log.write(f"Home: could not load Roblox's game lists ({ex}).")
-    return out
-
-
-def search(query: str, cookie: Optional[str] = None) -> List[Game]:
-    out: List[Game] = []
-    try:
-        r = api._req("GET", "https://apis.roblox.com/search-api/omni-search?searchQuery=" + quote(query, safe="")
-                     + f"&sessionId={uuid.uuid4()}&pageType=all", cookie)
-        if not r.ok:
-            log.write(f"Game search returned HTTP {r.status_code}.")
-            return out
-        for grp in r.json().get("searchResults", []):
-            if grp.get("contentGroupType") != "Game":
-                continue
-            for c in grp.get("contents") or []:
-                g = _from_list_item(c)
-                if g.place_id and not any(x.universe_id == g.universe_id for x in out):
-                    out.append(g)
-    except Exception as ex:
-        log.write(f"Game search failed: {ex}")
-    return out
-
-
 def favourites(user_id: int, cookie: Optional[str] = None) -> List[Game]:
     """The account's favourite games on Roblox (newest first)."""
     try:
@@ -120,7 +67,7 @@ def favourites(user_id: int, cookie: Optional[str] = None) -> List[Game]:
         fill(games)
         return games
     except Exception as ex:
-        log.write(f"Home: could not load favourites ({ex}).")
+        log.write(f"Could not load favourite games ({ex}).")
         return []
 
 
@@ -190,20 +137,26 @@ def fill(games: List[Game]) -> None:
                 if g:
                     g.up, g.down = int(d.get("upVotes") or 0), int(d.get("downVotes") or 0)
     except Exception as ex:
-        log.write(f"Home: could not load game details ({ex}).")
+        log.write(f"Could not load game details ({ex}).")
 
 
 def from_places(place_ids: List[int]) -> List[Game]:
-    """Games for a list of place ids (recently played), in the same order, with details."""
+    """Games for a list of place ids (recently played), in the same order, with details - one per game: places of
+    the same game (a lobby and its match servers) used to show twice, the second one without a name."""
     unis = universes(place_ids)
-    games = [Game(universe_id=unis[p], place_id=p) for p in place_ids if p in unis]
+    games, seen = [], set()
+    for p in place_ids:
+        u = unis.get(p)
+        if u and u not in seen:
+            seen.add(u)
+            games.append(Game(universe_id=u, place_id=p))
     fill(games)
     return games
 
 
 # ---------------------------------------------------------------- icons
 def _save(path: Path, data: bytes) -> bool:
-    """Atomic write with a temp name of its own: Home, Library and profiles may fetch the same picture at once."""
+    """Atomic write with a temp name of its own: two workers may fetch the same picture at once."""
     tmp = path.with_name(f".{path.name}.{os.getpid()}.{threading.get_ident()}.tmp")
     try:
         tmp.write_bytes(data)
@@ -243,36 +196,5 @@ def fetch_icons(universe_ids: Iterable[int]) -> int:
                 if data and _save(icon_path(int(d["targetId"])), data):
                     saved += 1
     except Exception as ex:
-        log.write(f"Home: could not load game icons ({ex}).")
+        log.write(f"Could not load game icons ({ex}).")
     return saved
-
-
-def fetch_avatars(user_ids: Iterable[int]) -> int:
-    """Head shots for friends (same cache as the accounts' own: paths.AVATAR_DIR/<id>.png)."""
-    need = [u for u in dict.fromkeys(user_ids) if u > 0 and not (paths.AVATAR_DIR / f"{u}.png").exists()]
-    if not need:
-        return 0
-    paths.AVATAR_DIR.mkdir(parents=True, exist_ok=True)
-    saved = 0
-    for uid, url in api.avatar_urls(need).items():
-        data = api.download(url)
-        if data and _save(paths.AVATAR_DIR / f"{uid}.png", data):
-            saved += 1
-    return saved
-
-
-def is_favourite(universe_id: int, cookie: str) -> Optional[bool]:
-    try:
-        r = api._req("GET", f"https://games.roblox.com/v1/games/{universe_id}/favorites", cookie)
-        return bool(r.json().get("isFavorited")) if r.ok else None
-    except Exception:
-        return None
-
-
-def set_favourite(universe_id: int, cookie: str, on: bool) -> str:
-    """Favourites a game on the account (like the star on the website). Returns '' or the error."""
-    try:
-        r = api._post_csrf(f"https://games.roblox.com/v1/games/{universe_id}/favorites", cookie, {"isFavorited": on})
-        return "" if r.ok else f"HTTP {r.status_code}"
-    except Exception as ex:
-        return str(ex)

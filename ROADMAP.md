@@ -1,25 +1,32 @@
 # Cellar roadmap
 
-The goal: the app every Linux Sober user installs, including people with **one** account. Multi-instance is
-what gets alt farmers in; the everyday QOL (a nicer Sober settings UI, FFlags, logs, an account switcher, Discord
-alerts, "Play" links from the browser) is what makes it a must-have for everyone else.
-
-**North star:** Cellar is the one thing a Linux player installs on top of Sober. It replaces Sober's own UI, the
-Roblox app and website, and the QOL browser extensions (RoValra and friends). **Benefits outweigh cost:** a
-feature is never cut or watered down to look lightweight; efficiency only means no waste.
+**North star (decided 2026-11-24):** Cellar is the multi-account launcher and Sober companion for Linux - the
+missing piece *next to* roblox.com and RoValra, not a replacement for them. Browse and find games on the website
+(with RoValra), press Play, and Cellar decides which accounts go and runs them. Cellar is for what a browser
+can't do: many isolated Sobers at once, background mode, macros, anti-AFK, freeze, auto-rejoin, an account
+switcher and a real settings / Fast Flag editor for Sober. **Benefits outweigh cost:** a feature is never cut or
+watered down to look lightweight; efficiency only means no waste. Keep the polished look (themes, cards, toasts,
+Ctrl+K); cut what only serves browsing Roblox.
 
 Size: **S** = an evening, **M** = a few days, **L** = a week or more. ⚠ = more automation, so more risk of
 Roblox moderation; keep it opt-in with a clear warning. 🔬 = research first (Sober or Roblox may not allow it).
 
-## H. Home: replace the website (next up)
+## T. Layout (decided: the Roblox MultiHub layout - see DESIGN.md)
 
-- [x] **M** Home tab, the first thing you see: continue playing (recent games), friends online + Join, favourite
-      games with thumbnails and live player counts, game search with Play (pick the account), discover rows
-- [x] **M** Game page: description, stats, Play / Play with / Play in my normal Sober, Servers, Favourite
-- [ ] **M** Game page, more: screenshots, badges (private servers: done)
-- [x] **S** Thumbnail cache on disk (avatars + game icons, ~37 KB each, refreshed weekly)
-- [ ] **M** Website QOLs worth having in-app (ideas from RoValra): server region picker, mutual friends,
-      "join friend's server", hidden-catalog / outfit tools - pick per item, measure the API cost
+- [x] **S** DESIGN.md: the layout and the UI rules, so the layout stops changing page by page
+- [x] **M** MultiHub layout with themes: header numbers, account list always on the left, tool tabs (Launch first),
+      log at the bottom; Home / Library / game pages / profile pages / Friends / Servers removed (their useful
+      parts are in the Launch tab)
+- [x] **M** Launch tab: Game / Server / Private server / Friend; Your games as tiles (recent + the main account's
+      favourites); search or paste a link; Quick join + History; saved private servers; friends online to follow;
+      a launch button that says what will happen
+- [ ] **S** Audit every tab against DESIGN.md (Settings and Performance are still long forms)
+
+## Parked (website features: roblox.com + RoValra do these; not Cellar's job)
+
+- Home tab (discover / popular / trending rows), Library tab, game pages, profile pages (built in 1.1, removed
+  for the MultiHub layout)
+- Game page screenshots and badges; RoValra-style website QOLs (mutual friends, catalog / outfit tools)
 
 ## E. Efficiency (no waste - never at the cost of a feature)
 
@@ -27,7 +34,13 @@ Measured 2026-11-23: bare Qt window 93 MB, + WebEngine import 129 MB, full Cella
 the real running app was ~450 MB after hours.
 - [x] **S** Load Qt WebEngine only when the browser login opens (-36 MB at start; tested on NVIDIA + Wayland)
 - [x] ~~Build tabs on first open~~ - measured: all 11 tabs together are ~22 MB; not worth the rewiring
-- [ ] **S** Find what grows over hours (log view, avatars, threads) and cap it; target < 200 MB running
+- [x] **S** Find what grows over hours and cap it (`tools/soak.py`, 2026-11-24): every right-click menu and every
+      dialog (game page, Edit account, browser login...) stayed alive until Cellar quit, and the game / avatar picture
+      cache never shrank. Before: +75 widgets, +344 Qt objects, ~5.5 MB per soak round; after: flat, and RSS levels
+      off once the picture cache is full (400 pictures, ~35 MB). Log view (3000 lines) and graphs (1 hour) were
+      already capped
+- [ ] **S** Measure the real app after a few hours with this build (it was 277 MB after 7 min on NVIDIA + Wayland,
+      ~100 MB of that is file-backed / GL driver); target < 200 MB of our own memory
 
 ## 0. Fix first (found while reading the code)
 
@@ -40,6 +53,8 @@ the real running app was ~450 MB after hours.
 - [x] **S** `presets_page._place_when_ready` crashes if an account is removed while its preset is launching
 - [x] **S** When Sober is not installed, the 2 s header tick runs `flatpak info` on the UI thread every time
       (only success is cached)
+- [x] **S** Move up / Move down selected a different account afterwards (the selection was read back by row
+      after the list had been reordered); `refresh_accounts(select=ids)` now
 
 ## 1. Look and feel
 
@@ -79,9 +94,9 @@ the real running app was ~450 MB after hours.
 - [x] **M** **Account switcher for your normal Sober**: "Use this account in my Sober" writes its login into the
       main Sober profile (the killer feature for single-instance users and people with 2–3 accounts)
 - [x] **S** Pin to top
-- [ ] **S** Colour tags per account
+- [x] **S** Colour tags per account (right-click > Colour tag, Edit / Bulk edit, filter by tag; bar on cards + table)
 - [x] **S** Drop cookie files / text / accounts .dat onto the window to import
-- [ ] **S** Drag and drop to reorder accounts
+- [x] **S** Drag and drop to reorder accounts (cards and table, in "Your order"; several at once)
 - [x] **S** Robux, Premium, account age, friends / followers / groups: on the profile page
 - [x] **M** Encrypted export / import of accounts (password file, same format as accounts.dat)
 - [x] **S** Restore from backup dialog (the backups already exist in `backups/`, just no UI)
@@ -89,7 +104,7 @@ the real running app was ~450 MB after hours.
 - [x] **S** Bulk edit: background mode, full quality, auto macro, group
 - [ ] **S** Auto-lock: ask for the password again after N minutes idle (password mode)
 - [x] **M** Full-body avatar refreshed on the profile page
-- [ ] **S** Headshot in the screen viewer title
+- [x] **S** Headshot in the screen viewer title (window icon)
 
 ## 4. Launching and joining
 

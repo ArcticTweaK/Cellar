@@ -7,8 +7,8 @@ from typing import Callable, Optional
 
 from PySide6.QtCore import QObject, Qt, Signal
 from PySide6.QtGui import QIcon
-from PySide6.QtWidgets import (QCheckBox, QComboBox, QFormLayout, QGroupBox, QHBoxLayout, QLabel, QMessageBox,
-                               QPushButton, QSizePolicy, QSpinBox, QVBoxLayout, QWidget)
+from PySide6.QtWidgets import (QCheckBox, QComboBox, QDialog, QFormLayout, QGroupBox, QHBoxLayout, QLabel, QMenu,
+                               QMessageBox, QPushButton, QSizePolicy, QSpinBox, QVBoxLayout, QWidget)
 
 from .. import log, theme
 
@@ -70,6 +70,31 @@ def app_icon() -> QIcon:
 _icon_buttons: list = []
 
 
+# A menu or dialog made with a parent stays that parent's child until the parent dies - for the main window, until
+# Cellar quits (tools/soak.py: +60 widgets / +520 Qt objects per round of right-clicks before this). deleteLater()
+# right after exec() frees it once control is back in the event loop that called exec(): the code after exec()
+# can still read the dialog, even across a message box (Qt's rule; WA_DeleteOnClose fires inside the dialog's own
+# loop instead, so a later message box could free it under you).
+def popup(m: QMenu, pos) -> None:
+    """Shows a one-off menu (right-click, Play with...) and frees it afterwards. Not a QMenu subclass: exec() on
+    any Python subclass of QMenu segfaults in PySide 6.12. Not aboutToHide -> deleteLater either: a dialog popping
+    up while the menu is open would close it inside the dialog's loop and free it while QMenu.exec still runs."""
+    try:
+        m.exec(pos)
+    finally:
+        m.deleteLater()
+
+
+class Dialog(QDialog):
+    """Base of Cellar's own dialogs: exec() once, then it frees itself (see above)."""
+
+    def exec(self) -> int:
+        try:
+            return super().exec()
+        finally:
+            self.deleteLater()
+
+
 def _icon_token(primary: bool) -> str:
     # filled accent buttons only exist in Cellar's own themes; System keeps the desktop's normal buttons
     return "on_accent" if primary and theme.current().key != "system" else "text"
@@ -95,6 +120,8 @@ def btn(text: str, slot=None, tip: str = "", icon: str = "", primary: bool = Fal
         # only Cellar's own icon set: desktop icon themes mixed styles (and differ on every distro)
         b.setIcon(theme.icon(icon, _icon_token(primary)))
         _icon_buttons.append((weakref.ref(b), icon, primary))
+        if len(_icon_buttons) % 256 == 0:           # dialogs come and go: drop buttons that are gone
+            _icon_buttons[:] = [x for x in _icon_buttons if x[0]() is not None]
     if slot:
         b.clicked.connect(lambda *_: slot())
     if tip:

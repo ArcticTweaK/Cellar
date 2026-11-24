@@ -7,7 +7,7 @@ import sys
 
 from PySide6.QtCore import QRectF, Qt
 from PySide6.QtGui import QColor, QPainter, QPen
-from PySide6.QtWidgets import (QAbstractButton, QButtonGroup, QGridLayout, QLabel, QLineEdit, QPlainTextEdit,
+from PySide6.QtWidgets import (QAbstractButton, QButtonGroup, QComboBox, QGridLayout, QLabel, QLineEdit, QPlainTextEdit,
                                QScrollArea, QTextBrowser, QVBoxLayout, QWidget)
 
 from .. import (APP_ID, APP_NAME, AUTHOR, __version__, antiafk, crypto, gfx, paths, playlink, sober, store, theme,
@@ -323,6 +323,62 @@ class PerfPage(QWidget, _Bound):
         TextDialog(self, "Fast Flags", gfx.preview(S())).exec()
 
 
+class AutomationSettings(QWidget, _Bound):
+    """The Anti-AFK & rejoin tab: the watcher (auto-relaunch, rejoin after a kick) and anti-AFK."""
+
+    def __init__(self, mw):
+        QWidget.__init__(self)
+        _Bound.__init__(self)
+        self.mw = mw
+        inner = QWidget()
+        v = QVBoxLayout(inner)
+
+        g, f = group("Watcher (auto-relaunch)")
+        f.addRow(self.bind(chk("Relaunch accounts whose window closed or crashed", S().auto_relaunch), S, "auto_relaunch",
+                           self.mw.restart_timers))
+        f.addRow("Check every", self.bind(spin(15, 3600, S().watcher_sec, suffix=" s"), S, "watcher_sec", self.mw.restart_timers))
+        f.addRow(self.bind(chk("Rejoin right away when an account is kicked or loses connection",
+                               S().rejoin_on_kick, tip="Cellar reads each account's Roblox log, so it notices a "
+                                                       "disconnect within seconds. A lost connection rejoins the same "
+                                                       "server."), S, "rejoin_on_kick"))
+        f.addRow(self.bind(chk("Also relaunch accounts that are no longer in a game (presence check)",
+                               S().watcher_use_presence), S, "watcher_use_presence"))
+        f.addRow(self.bind(chk("Crash breaker: stop relaunching an account that keeps crashing", S().crash_breaker),
+                           S, "crash_breaker"))
+        f.addRow("Give up after", row(self.bind(spin(1, 50, S().crash_breaker_max, suffix=" relaunches"), S, "crash_breaker_max"),
+                                      QLabel("within"),
+                                      self.bind(spin(1, 120, S().crash_breaker_window_min, suffix=" min"), S, "crash_breaker_window_min"),
+                                      QLabel("retry after"),
+                                      self.bind(spin(1, 600, S().crash_breaker_cooldown_min, suffix=" min"), S, "crash_breaker_cooldown_min")))
+        v.addWidget(g)
+
+        g, f = group("Anti-AFK")
+        f.addRow(self.bind(chk("Keep accounts from being kicked for idling", S().anti_afk), S, "anti_afk", self.mw.restart_timers))
+        f.addRow("Every", self.bind(spin(1, 19, S().anti_afk_min, suffix=" min",
+                                         tip="Roblox kicks after about 20 minutes without input."), S, "anti_afk_min",
+                                    self.mw.restart_timers))
+        f.addRow("Action", self.bind(combo(antiafk.ACTIONS, S().anti_afk_action), S, "anti_afk_action"))
+        self.afk_status = QLabel()
+        self.afk_status.setWordWrap(True)
+        f.addRow(self.afk_status)
+        f.addRow(btn("Run once now", self.mw.anti_afk_now))
+        v.addWidget(g)
+
+        v.addStretch(1)
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.addWidget(scrolled(inner))
+        self.update_status()
+
+    def update_status(self):
+        a = antiafk.status()
+        self.afk_status.setText(theme.span("good", "✓ ydotool is ready.") if not a else theme.span("warn", a))
+
+    def showEvent(self, ev):
+        super().showEvent(ev)
+        self.update_status()
+
+
 class SettingsPage(QWidget, _Bound):
     def __init__(self, mw):
         QWidget.__init__(self)
@@ -389,38 +445,12 @@ class SettingsPage(QWidget, _Bound):
                            S, "mute_alts", self.mw.audio_tick))
         v.addWidget(g)
 
-        g, f = group("Watcher (auto-relaunch)")
-        f.addRow(self.bind(chk("Relaunch accounts whose window closed or crashed", S().auto_relaunch), S, "auto_relaunch",
-                           self.mw.restart_timers))
-        f.addRow("Check every", self.bind(spin(15, 3600, S().watcher_sec, suffix=" s"), S, "watcher_sec", self.mw.restart_timers))
-        f.addRow(self.bind(chk("Rejoin right away when an account is kicked or loses connection",
-                               S().rejoin_on_kick, tip="Cellar reads each account's Roblox log, so it notices a "
-                                                       "disconnect within seconds. A lost connection rejoins the same "
-                                                       "server."), S, "rejoin_on_kick"))
-        f.addRow(self.bind(chk("Also relaunch accounts that are no longer in a game (presence check)",
-                               S().watcher_use_presence), S, "watcher_use_presence"))
-        f.addRow(self.bind(chk("Crash breaker: stop relaunching an account that keeps crashing", S().crash_breaker),
-                           S, "crash_breaker"))
-        f.addRow("Give up after", row(self.bind(spin(1, 50, S().crash_breaker_max, suffix=" relaunches"), S, "crash_breaker_max"),
-                                      QLabel("within"),
-                                      self.bind(spin(1, 120, S().crash_breaker_window_min, suffix=" min"), S, "crash_breaker_window_min"),
-                                      QLabel("retry after"),
-                                      self.bind(spin(1, 600, S().crash_breaker_cooldown_min, suffix=" min"), S, "crash_breaker_cooldown_min")))
-        v.addWidget(g)
-
-        g, f = group("Anti-AFK")
-        f.addRow(self.bind(chk("Keep accounts from being kicked for idling", S().anti_afk), S, "anti_afk", self.mw.restart_timers))
-        f.addRow("Every", self.bind(spin(1, 19, S().anti_afk_min, suffix=" min",
-                                         tip="Roblox kicks after about 20 minutes without input."), S, "anti_afk_min",
-                                    self.mw.restart_timers))
-        f.addRow("Action", self.bind(combo(antiafk.ACTIONS, S().anti_afk_action), S, "anti_afk_action"))
-        self.afk_status = QLabel()
-        self.afk_status.setWordWrap(True)
-        f.addRow(self.afk_status)
-        f.addRow(btn("Run once now", self.mw.anti_afk_now))
-        v.addWidget(g)
-
         g, f = group("Account list")
+        self.main_acc = QComboBox()
+        self.main_acc.setToolTip("Its friends fill the Launch tab's Friend list, its favourites fill "
+                                 "'Your games', and friend notifications are about its friends.")
+        self.main_acc.currentIndexChanged.connect(self._main_account_changed)
+        f.addRow("Main account", self.main_acc)
         f.addRow(self.bind(chk("Show live status (online / in game)", S().show_presence), S, "show_presence", self.mw.restart_timers))
         f.addRow("Refresh every", self.bind(spin(15, 600, S().presence_sec, suffix=" s"), S, "presence_sec", self.mw.restart_timers))
         f.addRow(self.bind(chk("Check every saved login when the app starts", S().check_logins_at_startup), S,
@@ -433,7 +463,7 @@ class SettingsPage(QWidget, _Bound):
                            ("notify_crash", "A Roblox window closed unexpectedly"),
                            ("notify_login_lost", "Roblox signed an account out"),
                            ("notify_launch_done", "A launch sequence finished"),
-                           ("notify_friends", "A friend comes online or starts a game (friends of the Home account)")):
+                           ("notify_friends", "A friend comes online or starts a game (friends of your main account)")):
             f.addRow(self.bind(chk(text, getattr(S(), attr)), S, attr))
         v.addWidget(g)
 
@@ -502,6 +532,20 @@ class SettingsPage(QWidget, _Bound):
             self.mw.apply_theme(key)
         self.themes.refresh()
 
+    def _fill_main_account(self):
+        self.main_acc.blockSignals(True)
+        self.main_acc.clear()
+        self.main_acc.addItem("Automatic (the one marked Full quality, else the first)", "")
+        for acc in sorted((x for x in store.accounts if x.user_id and x.cookie), key=lambda x: x.order):
+            self.main_acc.addItem(acc.name, acc.id)
+        self.main_acc.setCurrentIndex(max(0, self.main_acc.findData(S().home_account)))
+        self.main_acc.blockSignals(False)
+
+    def _main_account_changed(self, *_):
+        S().home_account = self.main_acc.currentData() or ""
+        store.save_settings()
+        self.mw.launch_page.main_account_changed()
+
     def update_status(self):
         self._sync_play_links()
         ok, why = sober.multi_instance_support()
@@ -514,8 +558,7 @@ class SettingsPage(QWidget, _Bound):
         else:
             t = theme.span("warn", f"Not available - {why}. Until then one window at a time is used.")
         self.mi_status.setText(t)
-        a = antiafk.status()
-        self.afk_status.setText(theme.span("good", "✓ ydotool is ready.") if not a else theme.span("warn", a))
+        self._fill_main_account()
         self.enc.setText(f"Your accounts file is encrypted with <b>{store.key_location()}</b>."
                          + ("<br>" + theme.span("warn", "No keyring was found, so the key sits next to the file. "
                                                 "Set a password for real protection.")
@@ -604,23 +647,32 @@ HELP = f"""
 Free and open source (GPL-3.0).</p>
 
 <h3>Finding your way</h3>
-<p>The big tabs at the top: <b>Home</b> (discover and search Roblox games), <b>Library</b> (your games: recent,
-favourites, private servers), <b>Accounts</b> (the account list and the launch panel), <b>Friends</b>, and
-<b>Tools</b> (Servers, Presets, Macros, Windows, Performance, My Sober). Settings, Help and Activity are the icons
-at the top right, next to your account (click it for its profile). The arrows at the top left (or Alt+Left /
-Alt+Right, or your mouse's back button) go back and forward. Too small or too big? Settings &gt; Appearance &gt;
-<b>Size</b>.</p>
+<p>One window: the live numbers at the top, your accounts on the left, the tools as tabs on the right (Launch,
+Presets, Macros, Anti-AFK &amp; rejoin, Windows, My Sober, Performance, Settings, Help) and the log at the bottom
+(filter it to problems or one account, or search it). Ctrl+1 ... Ctrl+9 open the tabs, Ctrl+K anything. Too small
+or too big? Settings &gt; Appearance &gt; <b>Size</b>.</p>
+<p>Cellar sits next to roblox.com, it does not replace it: find games on the website (RoValra and other
+extensions keep working there), press Play, and Cellar asks which accounts join (see <i>The website's Play
+button</i>).</p>
 
-<h3>Profiles</h3>
-<p>Every account has a profile page: right-click it &gt; <b>View profile</b>, double-click it in the Cards view,
-or click your account at the top right. It shows its avatar, Robux, Premium, friends, followers, groups, newest
-badges and the games it played (with Rejoin).</p>
-
-<h3>Home</h3>
-<p>Home, the first page, replaces the Roblox website: search games, <b>Continue playing</b> (games you and your accounts
-played), friends online (click one to join them), favourites and Roblox's popular / trending lists. Click a game
-for its page: <b>Play</b> lets you pick the account(s) or play in your normal Sober, <b>Favourite</b> stars it on
-Roblox. Right-click a game to play it straight away. <i>Home for</i> picks whose friends and favourites you see.</p>
+<h3>Launching</h3>
+<p>Select accounts in the list (Ctrl / Shift for several), choose where they go on the <b>Launch</b> tab (Game,
+Server, Private server or Friend), and press the big launch button - it says what will happen ("Launch 3 accounts into ABOVE"). Enter or a
+double-click on an account launches too.</p>
+<ul>
+<li><b>Game</b>: your games as tiles - <i>Recent</i> (what your accounts played) or <i>Favourites</i> (your main
+account's Roblox favourites). Click one to choose it, double-click to launch the selected accounts there,
+right-click for <i>Play with...</i>, your normal Sober or its servers. The search field finds any game by name,
+or takes a pasted game link / Place ID.</li>
+<li><b>Server</b>: one exact server of the chosen game. <i>Pick server...</i> lists its servers and has <b>Quick
+join</b> (the emptiest server, or a busy one with room for everyone you send); <i>History...</i> lists every server
+your accounts joined.</li>
+<li><b>Private server</b>: paste a link; <i>Save...</i> keeps it in the list below for one click next time.</li>
+<li><b>Friend</b>: your main account's friends who are online (in a game first) - click one, or type any
+username. Your main account is set in Settings &gt; Account list &gt; <b>Main account</b>.</li>
+</ul>
+<p>Accounts that have their own game (Edit account) go there unless you untick <i>Accounts with their own game go
+there</i>. <b>...</b> next to it saves the chosen game to the selected accounts.</p>
 
 <h3>Adding accounts</h3>
 <ul>
@@ -650,7 +702,7 @@ links back to Sober.</p>
 <p>Settings for your <b>normal</b> Sober (the one in your app menu), useful even with one account: renderer,
 FPS cap and Sober's options in plain language, a Fast Flags editor (the last column shows which flags Roblox
 really uses - it ignores flags that are not on its allowlist), and repair tools that clear caches and crash dumps.
-Your accounts' own profiles are set on the Performance page.</p>
+Your accounts' own profiles are set in the <b>Performance</b> tab.</p>
 
 <h3>Account switcher</h3>
 <p>Right-click an account &gt; <b>Use in my normal Sober</b> logs your normal Sober into that account. Close Sober
@@ -660,30 +712,31 @@ first. The account Sober was using is added to Cellar if it is not there yet, so
 <p>Tick <b>Run in the background</b> in an account's settings and it gets its own invisible screen with its own
 mouse and keyboard: nothing shows on your desktop and nothing takes your focus. Right-click it &gt;
 <b>View screen</b> to watch it, control it, record a macro or take a screenshot (saved in Pictures/Cellar). Macros are plain text
-(Macros page) and run per account, so one account can farm while another does something else; <b>Export</b> /
+(Macros tab) and run per account, so one account can farm while another does something else; <b>Export</b> /
 <b>Import</b> share them as .txt files. Needs <tt>sway</tt> and <tt>wayvnc</tt>.</p>
 
 <h3>Screen wall and freezing</h3>
-<p><b>Screen wall</b> (Windows page, tray menu or right-click a background account) shows every background
+<p><b>Screen wall</b> (Windows, tray menu, Ctrl+Shift+W or right-click a background account) shows every background
 account's screen in one window, about one picture a second; click one to open it. Right-click a running account
 &gt; <b>Freeze</b> stops it from using CPU while it stays open. By default it wakes for a moment every 10 s so it
-keeps answering the game server and stays in it (Performance page &gt; Freeze); turned off it uses no CPU at all,
+keeps answering the game server and stays in it (Performance &gt; Freeze); turned off it uses no CPU at all,
 but Roblox drops it from the server after a while. The Usage column shows what each account uses (100% = the whole PC).</p>
 
 <h3>Kicks and notifications</h3>
 <p>Cellar reads each running account's own Roblox log, so a kick or lost connection is noticed within seconds.
-It shows a desktop notification, and with Settings &gt; Watcher &gt; <b>Rejoin right away when an account is
-kicked</b> it comes back by itself - into the same server after a lost connection. Which notifications you get
+It shows a desktop notification, and with Anti-AFK &amp; rejoin &gt; <b>Rejoin right away when an
+account is kicked</b> it comes back by itself - into the same server after a lost connection. Which notifications you get
 is set in Settings &gt; Desktop notifications.</p>
 
-<h3>Windows page</h3>
+<h3>Windows</h3>
 <p>On Wayland only the compositor may move windows, so layouts go through it: KWin scripts on KDE Plasma,
 <tt>hyprctl</tt> on Hyprland and <tt>swaymsg</tt> on Sway (there the windows are made floating first).
 Pick a monitor, a grid mode and press <b>Arrange now</b>, or let new windows be arranged automatically.</p>
 
-<h3>Performance</h3>
-<p>FPS cap, graphics Fast Flags and Sober options are written into each account's profile before it launches.
-CPU priority and the RAM limit use the systemd scope every Sober window runs in. The Performance page also
+<h3>Alts and performance</h3>
+<p>The <b>Performance</b> tab: FPS cap, graphics Fast Flags and Sober options are written into each
+account's profile before it launches. CPU priority and the RAM limit use the systemd scope every Sober window runs
+in. The page also
 estimates how many more alts fit in your free memory, can wait before each launch until enough memory is free,
 and can close the newest alt when memory runs low (never one marked Full quality). <b>Last hour</b> graphs the CPU
 and memory of everything Cellar runs (hover for exact values). Edit account &gt; <b>Graphics</b> gives one account
@@ -694,42 +747,42 @@ its own graphics preset.</p>
 your desktop's own look. The change shows right away.</p>
 
 <h3>Anti-AFK</h3>
-<p>Background accounts get a key press on their own screen. Normal windows are focused briefly and get one key
+<p>The <b>Anti-AFK &amp; rejoin</b> tab. Background accounts get a key press on their own screen. Normal windows are focused briefly and get one key
 press through <tt>ydotool</tt>; then your window gets the focus back.</p>
 
 <h3>Handy extras</h3>
 <ul>
 <li>Right-click an account &gt; <b>Bring accounts to its server</b>: the selected accounts, a group or everyone
 join the exact server that account is in.</li>
-<li>Servers page &gt; <b>History</b>: every server your accounts joined; rejoin any of them. <b>Quick join</b>
-picks the emptiest server, or a busy one that still has room for every account you send.</li>
-<li>A game's page &gt; <b>Your private servers</b>: save private server links with a name and join them in one
-click (each account must be allowed into that server).</li>
 <li>Settings &gt; Desktop notifications &gt; <b>A friend comes online or starts a game</b>: a message with a
-<b>Join</b> button (friends of the account picked in Home for).</li>
+<b>Join</b> button (friends of your main account).</li>
+<li>Right-click &gt; <b>Details</b> (or the Details button): Robux, Premium, account age and whether the login
+still works. Right-click &gt; <b>Open profile on roblox.com</b> for the rest.</li>
 <li>Right-click &gt; <b>Export to a file</b> (or Add account &gt; Export all) makes a password-protected copy of
 your accounts for another PC; import it there with Add account &gt; <b>Import accounts file</b>.</li>
+<li>Right-click &gt; <b>Colour tag</b> marks accounts with a colour (a bar on the card or table row); the group
+list above the accounts can then show only one colour. Edit account and Bulk edit have it too.</li>
 <li><b>Pin to top</b> keeps an account first in the list. <b>Log in again</b> appears on accounts Roblox signed
 out. Add account &gt; <b>Restore from a backup</b> brings back an earlier account list (the last 10 are kept).</li>
-<li>Friends page: right-click a friend to join them with any account or a whole group.</li>
 <li><b>Ctrl+K</b> opens the command palette: type a few letters of anything (an account, a page, a preset,
-a game, a theme) and press Enter. Text that matches nothing searches games.</li>
-<li>Accounts page: <b>Cards</b> or <b>Table</b> view (top right of the list).</li>
-<li>Keys: Enter = launch selected, F2 = edit, Ctrl+N = add account, Ctrl+Shift+S = stop all, Ctrl+1...0 = pages,
+a recent game, a theme) and press Enter. Text that matches nothing searches games to launch.</li>
+<li>The account list: <b>Cards</b> or <b>Table</b> view (top right of the list). With the list set to <b>Your
+order</b>, drag accounts to rearrange them (select several first to move them together).</li>
+<li>Keys: Enter = launch selected, F2 = edit, Ctrl+N = add account, Ctrl+Shift+S = stop all, Ctrl+1...9 = tabs,
 Ctrl+F = search, F5 = refresh status.</li>
 <li>Command line: <tt>cellar list</tt>, <tt>cellar launch NAME... [--place ID]</tt>, <tt>cellar preset NAME</tt>,
-<tt>cellar stop all</tt> (<tt>cellar help</tt> for all). <b>Add to app menu</b> (right-click an account, or on
-the Presets page) makes a launcher entry.</li>
+<tt>cellar stop all</tt> (<tt>cellar help</tt> for all). <b>Add to app menu</b> (right-click an account, or
+on the Presets tab) makes a launcher entry.</li>
 </ul>
 
 <h3>More</h3>
 <ul>
-<li>Launching shows a progress list on the Accounts page: ✓ started or ✗ failed with the reason, and
+<li>Launching shows a progress list on the Launch tab: ✓ started or ✗ failed with the reason, and
 <b>Retry failed</b>.</li>
-<li>Presets page &gt; <b>Schedule</b>: run a preset at a time of day and stop it later (Cellar must be running).</li>
+<li>Presets &gt; <b>Schedule</b>: run a preset at a time of day and stop it later (Cellar must be running).</li>
 <li>Settings &gt; Sound &gt; <b>Mute alts</b>, right-click &gt; Mute / Unmute, or a volume per account (Edit
 account). Needs PipeWire.</li>
-<li>Activity: show only problems or one account, or search.</li>
+<li>The log: show only problems or one account, or search it.</li>
 <li>Drop cookie files (or copied cookie text) onto the window to add accounts; drop an accounts .dat file to
 import it.</li>
 <li>Settings &gt; Appearance &gt; <b>Accent</b>: your own colour on any theme.</li>

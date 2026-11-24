@@ -11,17 +11,19 @@ from PySide6.QtCore import QItemSelectionModel, Qt
 from PySide6.QtGui import QGuiApplication
 from PySide6.QtWidgets import QFileDialog, QMenu
 
-from .. import api, paths, sober, store, util
+from .. import api, paths, sober, store, theme, util
 from ..models import Account
-from .accounts_model import ACCOUNT_ROLE
+from .accounts_model import ACCOUNT_ROLE, TAG_FILTER
 from .browser_login import HAVE_WEBENGINE, BrowserLogin
-from .common import ask, bg, warn
+from .common import ask, bg, popup, warn
 from .dialogs import BulkEditDialog, EditAccountDialog, PasswordDialog, PasteDialog, TextDialog
 
 
 class AccountsMixin:
-    def refresh_accounts(self):
-        sel = {a.id for a in self.selected_accounts()}
+    def refresh_accounts(self, select: Optional[set] = None):
+        """select: account ids to select afterwards. Pass it when store.accounts was reordered: the current
+        selection is read by row, and those rows now hold other accounts."""
+        sel = select if select is not None else {a.id for a in self.selected_accounts()}
         self.model.reload()
         self.apply_sort()
         sm = self.table.selectionModel()
@@ -32,7 +34,6 @@ class AccountsMixin:
         self.refresh_groups()
         self.on_selection()
         self.autohide_columns()
-        self.home_page.fill_accounts()
 
     def refresh_groups(self):
         keep = self.group_filter.currentData()
@@ -43,6 +44,10 @@ class AccountsMixin:
             self.group_filter.addItem(g, g)
         if any(not a.group for a in store.accounts) and store.all_groups():
             self.group_filter.addItem("(no group)", "")
+        used = {a.color for a in store.accounts}
+        for key, (label, *_) in theme.TAGS.items():
+            if key in used:
+                self.group_filter.addItem(theme.tag_icon(key), f"{label} tag", TAG_FILTER + key)
         i = self.group_filter.findData(keep)
         self.group_filter.setCurrentIndex(i if i >= 0 else 0)
         self.group_filter.blockSignals(False)
@@ -68,7 +73,6 @@ class AccountsMixin:
         return a.cookie if a else None
 
     def on_selection(self):
-        self.playing_as.set_accounts(self.selected_accounts())
         self.launch_page.update_selection(self.selected_accounts())
 
     @staticmethod
@@ -86,9 +90,14 @@ class AccountsMixin:
             if a and a.id in ids:
                 sm.select(self.proxy.index(r, 0), QItemSelectionModel.Select | QItemSelectionModel.Rows)
 
-    def show_profile(self, a: Account):
-        self.profile_page.set_account(a)
-        self.show_page(self.profile_page)
+    def main_account(self) -> Optional[Account]:
+        """Whose friends fill 'Follow a friend', whose favourites fill 'Your games' and whose friends the friend
+        notifications are about: Settings > Main account, else the one marked Full quality, else the first."""
+        a = store.find_by_id(store.settings.home_account)
+        if a and a.cookie and a.user_id:
+            return a
+        cands = sorted((x for x in store.accounts if x.cookie and x.user_id), key=lambda x: (not x.full_quality, x.order))
+        return cands[0] if cands else None
 
     def context_menu(self, pos, view=None):
         view = view or self.table
@@ -97,8 +106,6 @@ class AccountsMixin:
             return
         leader = view.indexAt(pos).data(ACCOUNT_ROLE) or sel[0]
         m = QMenu(self)
-        m.addAction("View profile", lambda: self.show_profile(leader))
-        m.addSeparator()
         m.addAction("Launch", self.launch_selected)
         m.addAction("Stop", self.stop_selected)
         bm = m.addMenu(f"Bring accounts to {leader.name}'s server")
@@ -143,9 +150,19 @@ class AccountsMixin:
         m.addAction("Unmute" if muted else "Mute", lambda: self.set_volume(sel, 100 if muted else 0))
         pin = not all(a.pinned for a in sel)
         m.addAction("Pin to top" if pin else "Unpin", lambda: self.set_pinned(sel, pin))
+        cm = m.addMenu(theme.tag_icon(sel[0].color if len({a.color for a in sel}) == 1 else ""), "Colour tag")
+        now = {a.color for a in sel}
+        for key, label in [("", "None")] + [(k, t[0]) for k, t in theme.TAGS.items()]:
+            # a check mark: with the swatch icon the style draws no check box for checkable actions
+            cm.addAction(theme.tag_icon(key), label + ("  ✓" if now == {key} else ""),
+                         lambda key=key: self.set_color(sel, key))
         m.addSeparator()
         m.addAction("Edit...", self.edit_selected)
         m.addAction("Details", self.details_selected)
+        if len(sel) == 1 and sel[0].user_id:
+            from .launch_pages import open_url
+            m.addAction("Open profile on roblox.com",
+                        lambda: open_url(f"https://www.roblox.com/users/{sel[0].user_id}/profile"))
         m.addAction("Copy cookie", lambda: self.copy([a.cookie for a in sel]))
         m.addAction("Copy username", lambda: self.copy([a.username for a in sel]))
         m.addAction("Export to a file...", lambda: self.export_accounts(sel))
@@ -160,7 +177,7 @@ class AccountsMixin:
         m.addAction("Reset Sober profile", self.reset_selected_profiles)
         m.addSeparator()
         m.addAction("Remove", self.remove_selected)
-        m.exec(view.viewport().mapToGlobal(pos))
+        popup(m, view.viewport().mapToGlobal(pos))
 
     def copy(self, items: List[str]):
         QGuiApplication.clipboard().setText("\n".join(items))
@@ -181,6 +198,12 @@ class AccountsMixin:
         store.save_accounts()
         self.refresh_accounts()
 
+    def set_color(self, accs: List[Account], key: str):
+        for a in accs:
+            a.color = key
+        store.save_accounts()
+        self.refresh_accounts()
+
     def restore_backup(self):
         from .dialogs import RestoreBackupDialog
         d = RestoreBackupDialog(self)
@@ -192,6 +215,23 @@ class AccountsMixin:
             self.log(f"Restored {len(store.accounts)} account(s) from a backup (you had {n_before}; that list is "
                      "kept as a backup too).")
 
+    def drop_reorder(self, target: Account, after: bool):
+        """Drag and drop in the account list: the selected accounts go right before / after `target`."""
+        if self.sort.currentData() != "Manual":
+            self.toast("To rearrange accounts by dragging, set the list to 'Your order' (next to the group list).")
+            return
+        sel = {a.id for a in self.selected_accounts()}
+        ids = sel - {target.id}
+        moved = [a for a in store.accounts if a.id in ids]
+        if not moved:
+            return
+        rest = [a for a in store.accounts if a.id not in ids]
+        i = next(n for n, a in enumerate(rest) if a.id == target.id) + (1 if after else 0)
+        store.accounts[:] = rest[:i] + moved + rest[i:]
+        store.renumber()                        # "Your order" sorts by .order
+        store.save_accounts()
+        self.refresh_accounts(select=sel)
+
     def move_selected(self, d: int):
         sel = self.selected_accounts()
         if not sel:
@@ -202,8 +242,9 @@ class AccountsMixin:
             return
         for i in (idx if d < 0 else reversed(idx)):
             accs[i], accs[i + d] = accs[i + d], accs[i]
+        store.renumber()
         store.save_accounts()
-        self.refresh_accounts()
+        self.refresh_accounts(select={a.id for a in sel})
 
     def _validate(self, cookie: str) -> bool:
         return api.authenticated(cookie).valid

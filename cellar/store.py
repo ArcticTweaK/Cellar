@@ -50,6 +50,10 @@ def load_settings() -> None:
     s = settings
     if raw and int(raw.get("settings_version", 1) or 1) < 2:
         _migrate_alt_defaults(s, raw)
+    if raw and int(raw.get("settings_version", 1) or 1) < 3:
+        s.accounts_view = "table"       # the MultiHub layout shows the list as a table (Cards still switches)
+        s.settings_version = 3
+        _save_settings()
     s.anti_afk_action = s.anti_afk_action if s.anti_afk_action in ("Zoom", "Space", "Nudge") else "Zoom"
     s.layout.min_w = max(100, s.layout.min_w)
     s.layout.min_h = max(80, s.layout.min_h)
@@ -76,11 +80,11 @@ def _migrate_alt_defaults(s: AppSettings, raw: dict) -> None:
     if untouched:
         gfx.apply_preset(s.gfx, "Lowest")
         changed.append("the Lowest graphics preset")
-    s.settings_version = 2
+    s.settings_version = max(s.settings_version, 2)
     mark_main_full_quality = True
     if changed:
         notices.append("Alts now run at " + " and ".join(changed) + " (measured: about 5x less CPU per alt; "
-                       "change it in Settings > Performance).")
+                       "change it in the Performance tab).")
     _save_settings()
 
 

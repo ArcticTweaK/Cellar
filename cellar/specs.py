@@ -89,7 +89,7 @@ def resolve_form(f: LaunchForm, first: Account, logf: Callable[[str], None]) -> 
 
 def resolve_saved_share(a: Account, per: LaunchSpec, logf: Callable[[str], None], save: bool = True) -> bool:
     """Resolves a share link with that account's login. save=True (the account's own saved link): also rewrites
-    the saved link to the old form, so later launches skip this step. A one-off launch (Home, a game page) must
+    the saved link to the old form, so later launches skip this step. A one-off launch (Your games, a website Play link) must
     not touch what the account has saved."""
     logf(f"{a.name}: resolving its private server link...")
     r = api.resolve_share(per.share_code, a.cookie)

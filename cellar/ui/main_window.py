@@ -1,35 +1,31 @@
-"""Main window: account list on the left, pages on the right, log at the bottom."""
+"""Main window, the Roblox MultiHub layout (DESIGN.md): live numbers at the top, the account list always on the
+left, the tools as tabs on the right (Launch first), the log across the bottom."""
 
 import os
 import threading
 from typing import Optional
 
-from PySide6.QtCore import QPoint, QSize, Qt, QTimer
+from PySide6.QtCore import QSize, Qt, QTimer
 from PySide6.QtGui import QAction, QGuiApplication, QKeySequence, QTextCursor
 from PySide6.QtWidgets import (QAbstractItemView, QApplication, QButtonGroup, QComboBox, QHBoxLayout, QHeaderView,
                                QLabel, QLineEdit, QMainWindow, QMenu, QPlainTextEdit, QPushButton, QSplitter,
-                               QStackedWidget, QSystemTrayIcon, QToolButton, QVBoxLayout, QWidget)
+                               QStackedWidget, QSystemTrayIcon, QTabWidget, QToolButton, QVBoxLayout, QWidget)
 
 from .. import APP_NAME, AUTHOR, __version__, log, paths, sober, store, theme, usage
 from .. import wm
-from ..models import Account
 from ..launcher import Launcher
 from .accounts_model import ACCOUNT_ROLE, AccountFilter, AccountModel
 from .common import app_icon, ask, btn, refresh_icons, row, ui
-from .friends_page import FriendsPage
-from .launch_pages import LaunchPage, ServersPage
-from .home_page import HomePage
-from .library_page import LibraryPage
-from .profile_page import ProfilePage
+from .launch_pages import LaunchPage
 from .macros_page import MacrosPage
 from .my_sober_page import MySoberPage
 from .presets_page import PresetsPage
-from .settings_pages import HelpPage, PerfPage, SettingsPage
+from .settings_pages import AutomationSettings, HelpPage, PerfPage, SettingsPage
 from .windows_page import WindowsPage
 from .accounts import AccountsMixin
 from .launching import LaunchMixin
 from .live import LiveMixin
-from .widgets import AccountCards, AccountChip, AccountTable, MiniStat, PlayingAs, page_frame
+from .widgets import AccountCards, AccountTable, StatBlock, eyebrow
 
 
 class MainWindow(AccountsMixin, LaunchMixin, LiveMixin, QMainWindow):
@@ -105,10 +101,12 @@ class MainWindow(AccountsMixin, LaunchMixin, LiveMixin, QMainWindow):
         self.cards.setSelectionModel(self.table.selectionModel())      # one selection for both views
         self.cards.setContextMenuPolicy(Qt.CustomContextMenu)
         self.cards.customContextMenuRequested.connect(lambda pos: self.context_menu(pos, self.cards))
-        # cards are the "people" view: double-click opens the account's profile (the table keeps launch; Enter
-        # launches in both)
-        self.cards.doubleClicked.connect(lambda idx: idx.data(ACCOUNT_ROLE) and self.show_profile(idx.data(ACCOUNT_ROLE)))
-        self.cards.setToolTip("Double-click an account for its profile · Enter launches the selected accounts")
+        self.cards.doubleClicked.connect(lambda idx: idx.data(ACCOUNT_ROLE) and self.launch_selected())
+        self.cards.setToolTip("Double-click or Enter launches the selected accounts · right-click for more · "
+                              "drag accounts to rearrange them")
+        for view in (self.table, self.cards):
+            view.reorder = self.drop_reorder
+            view.can_reorder = lambda: self.sort.currentData() == "Manual"
         self.list_stack = QStackedWidget()
         self.list_stack.addWidget(self.cards)
         self.list_stack.addWidget(self.table)
@@ -138,102 +136,91 @@ class MainWindow(AccountsMixin, LaunchMixin, LiveMixin, QMainWindow):
         bar.addWidget(add)
         bar.addWidget(btn("Edit", self.edit_selected))
         bar.addWidget(btn("Remove", self.remove_selected))
-        bar.addWidget(btn("Profile", lambda: self.selected_accounts() and self.show_profile(self.selected_accounts()[0]),
-                          tip="The selected account's profile page"))
+        bar.addWidget(btn("Details", self.details_selected,
+                          tip="Robux, Premium, account age and login state of the selected account(s)"))
         bar.addStretch(1)
+        bar.addWidget(btn("Launch", self.launch_selected, icon="play", primary=True,
+                          tip="Launch the selected accounts where the Launch tab says (Enter)"))
         bar.addWidget(btn("Stop", self.stop_selected, tip="Close the selected accounts' Roblox windows"))
         bar.addWidget(btn("Stop all", self.stop_all, tip="Close every Roblox window Cellar started (Ctrl+Shift+S)"))
         lv.addLayout(bar)
 
         # ---------------- pages
-        self.home_page = HomePage(self)
-        self.library_page = LibraryPage(self)
-        self.profile_page = ProfilePage(self)
         self.launch_page = LaunchPage(self)
-        self.servers_page = ServersPage(self)
         self.windows_page = WindowsPage(self)
         self.perf_page = PerfPage(self)
         self.presets_page = PresetsPage(self)
         self.macros_page = MacrosPage(self)
-        self.friends_page = FriendsPage(self)
+        self.auto_settings = AutomationSettings(self)
         self.settings_page = SettingsPage(self)
         self.my_sober_page = MySoberPage(self)
         self.help_page = HelpPage(self)
         self.viewers = {}
 
-        # Accounts = the account list and the launch panel side by side (the power-user screen)
-        self.hsplit = QSplitter(Qt.Horizontal)
-        self.hsplit.addWidget(left)
-        self.hsplit.addWidget(self.launch_page)
-        self.hsplit.setStretchFactor(0, 1)
-        self.hsplit.setStretchFactor(1, 1)
-        self.hsplit.setSizes(store.settings.split[:2] if len(store.settings.split) >= 2 else [620, 620])
-        self.accounts_page = page_frame("Accounts", "Select accounts (Ctrl / Shift for several), choose where they "
-                                        "go, and launch.", self.hsplit)
-
-        # Activity = the log (the status line at the bottom shows its newest line)
+        # the log, across the bottom (filter / search / copy above it)
         self.logview = QPlainTextEdit()
         self.logview.setObjectName("log")
         self.logview.setFont(theme.mono_font(max(7.5, self.font().pointSizeF() - 1)))
         self.logview.setReadOnly(True)
         self.logview.setMaximumBlockCount(3000)
-        act = QWidget()
-        av = QVBoxLayout(act)
-        av.setContentsMargins(0, 0, 0, 0)
+        self.logbox = logbox = QWidget()
+        av = QVBoxLayout(logbox)
+        av.setContentsMargins(0, 4, 0, 0)
+        av.setSpacing(4)
         self._log_lines: list = []              # everything this session (the view may show a filtered part)
         self.log_filter = QComboBox()
         self.log_filter.addItem("Everything", "")
         self.log_filter.addItem("Problems only", "!")
         self.log_filter.currentIndexChanged.connect(self._refilter_log)
         self.log_search = QLineEdit()
-        self.log_search.setPlaceholderText("Search the activity...")
+        self.log_search.setPlaceholderText("Search the log...")
         self.log_search.setClearButtonEnabled(True)
         self.log_search.textChanged.connect(self._refilter_log)
-        av.addWidget(row(self.log_filter, self.log_search, stretch=False))
-        av.addWidget(self.logview, 1)
-        av.addWidget(row(btn("Copy", lambda: QGuiApplication.clipboard().setText(self.logview.toPlainText())),
+        av.addWidget(row(eyebrow("Log"), self.log_filter, self.log_search,
+                         btn("Copy", lambda: QGuiApplication.clipboard().setText(self.logview.toPlainText())),
                          btn("Open log file", lambda: sober.open_folder(paths.LOG_FILE.parent)),
-                         btn("Clear", lambda: (self._log_lines.clear(), self.logview.clear()))))
-        self.activity_page = page_frame("Activity", "Everything Cellar did, newest at the bottom.", act)
+                         btn("Clear", lambda: (self._log_lines.clear(), self.logview.clear())), stretch=False))
+        av.addWidget(self.logview, 1)
 
-        # name, icon, page, where it lives: "main" = a big tab in the top bar, "tools" = the TOOLS menu,
-        # "corner" = an icon at the top right
-        self.nav_items = [
-            ("Home", "house", self.home_page, "main"),
-            ("Library", "square-stack", self.library_page, "main"),
-            ("Accounts", "user-round", self.accounts_page, "main"),
-            ("Friends", "users", page_frame("Friends", "", self.friends_page), "main"),
-            ("Servers", "server", page_frame("Servers", "", self.servers_page), "tools"),
-            ("Presets", "bookmark", page_frame("Presets", "", self.presets_page), "tools"),
-            ("Macros", "keyboard", page_frame("Macros", "", self.macros_page), "tools"),
-            ("Windows", "layout-grid", page_frame("Windows", "", self.windows_page), "tools"),
-            ("Performance", "gauge", page_frame("Performance", "", self.perf_page), "tools"),
-            ("My Sober", "gamepad-2", page_frame("My Sober", "", self.my_sober_page), "tools"),
-            ("Settings", "settings", page_frame("Settings", "", self.settings_page), "corner"),
-            ("Help", "circle-help", page_frame("Help", "", self.help_page), "corner"),
-            ("Activity", "activity", self.activity_page, "corner"),
-            ("Profile", "user-round", self.profile_page, "hidden"),         # opened from an account / the chip
-        ]
-        self.tabs = QStackedWidget()            # named tabs: the rest of the code switches pages through it
-        for _, _, page, _ in self.nav_items:
-            self.tabs.addWidget(page)
-        self.tabs.currentChanged.connect(self._tab_changed)
-        self._history, self._hpos, self._hjump = [0], 0, False
+        # the tools, as tabs next to the account list
+        self.tabs = QTabWidget()
+        self.tabs.setObjectName("tools")
+        self.tab_pages = [("Launch", self.launch_page), ("Presets", self.presets_page), ("Macros", self.macros_page),
+                          ("Anti-AFK && rejoin", self.auto_settings), ("Windows", self.windows_page),
+                          ("My Sober", self.my_sober_page), ("Performance", self.perf_page),
+                          ("Settings", self.settings_page), ("Help", self.help_page)]
+        for name, page in self.tab_pages:
+            self.tabs.addTab(page, name)
+        self.tabs.currentChanged.connect(self._page_shown)
+        self.accounts_page = left               # show_page(accounts_page) = the list (always on screen)
+        # every place the command palette (Ctrl+K) can go to
+        self.goto_items = [(name.replace("&&", "and"), page) for name, page in self.tab_pages] + [("Log", logbox)]
+
+        self.hsplit = QSplitter(Qt.Horizontal)
+        self.hsplit.addWidget(left)
+        self.hsplit.addWidget(self.tabs)
+        self.hsplit.setStretchFactor(0, 2)
+        self.hsplit.setStretchFactor(1, 3)
+        self.hsplit.setSizes(store.settings.split[:2] if len(store.settings.split) >= 2 else [600, 900])
+        self.vsplit = QSplitter(Qt.Vertical)
+        self.vsplit.addWidget(self.hsplit)
+        self.vsplit.addWidget(logbox)
+        self.vsplit.setStretchFactor(0, 1)
+        self.vsplit.setStretchFactor(1, 0)
+        self.vsplit.setSizes(store.settings.split_v[:2] if len(store.settings.split_v) >= 2 else [760, 170])
 
         body = QWidget()
         bv = QVBoxLayout(body)
-        bv.setContentsMargins(24, 16, 24, 8)
-        bv.addWidget(self.tabs, 1)
+        bv.setContentsMargins(10, 8, 10, 8)
+        bv.addWidget(self.vsplit, 1)
         central = QWidget()
         cv = QVBoxLayout(central)
         cv.setContentsMargins(0, 0, 0, 0)
         cv.setSpacing(0)
-        cv.addWidget(self._build_topbar())
+        cv.addWidget(self._build_header())
         cv.addWidget(body, 1)
-        cv.addWidget(self._build_bottombar())
         self.setCentralWidget(central)
         self.setAcceptDrops(True)
-        self.me.set_account(self.home_page.home_account())
         self.sampler = usage.Sampler()
 
         self.addAction(QAction(self, shortcut=QKeySequence.Find, triggered=lambda: self.search.setFocus()))
@@ -246,11 +233,10 @@ class MainWindow(AccountsMixin, LaunchMixin, LiveMixin, QMainWindow):
                 view.addAction(a)
         for key, fn in (("F2", self.edit_selected), ("Ctrl+Shift+S", self.stop_all), ("Ctrl+N", self.add_browser),
                         ("Ctrl+A", lambda: self.table.selectAll()), ("Ctrl+Shift+W", self.open_screen_wall),
-                        ("F5", self.presence_tick), ("Ctrl+K", self.open_palette), ("Ctrl+P", self.open_palette),
-                        ("Alt+Left", self.go_back), ("Alt+Right", self.go_forward)):
+                        ("F5", self.presence_tick), ("Ctrl+K", self.open_palette), ("Ctrl+P", self.open_palette)):
             self.addAction(QAction(self, shortcut=QKeySequence(key), triggered=fn))
-        for n in range(1, 11):          # Ctrl+1 ... Ctrl+0 = the first ten pages (sidebar order)
-            self.addAction(QAction(self, shortcut=QKeySequence(f"Ctrl+{n % 10}"),
+        for n in range(1, 10):          # Ctrl+1 ... Ctrl+9 = the tabs
+            self.addAction(QAction(self, shortcut=QKeySequence(f"Ctrl+{n}"),
                                    triggered=lambda _=False, i=n - 1: self.tabs.setCurrentIndex(i)))
 
         self.search.textChanged.connect(self.proxy.set_text)
@@ -335,8 +321,6 @@ class MainWindow(AccountsMixin, LaunchMixin, LiveMixin, QMainWindow):
         self.logview.moveCursor(QTextCursor.End)
 
     def _append_log(self, line: str, replace: bool) -> None:
-        fm = self.status_line.fontMetrics()
-        self.status_line.setText(fm.elidedText(line, Qt.ElideRight, max(200, self.status_line.width() - 24)))
         if replace and self._log_lines:
             self._log_lines[-1] = line
         else:
@@ -355,28 +339,28 @@ class MainWindow(AccountsMixin, LaunchMixin, LiveMixin, QMainWindow):
         self.logview.moveCursor(QTextCursor.End)
 
     def show_page(self, page):
-        self.tabs.setCurrentWidget(page)
+        """Opens the tab a page is on (also a page inside a page). The account list and the log are always on
+        screen, so for them this only makes sure the window shows."""
+        w = page
+        while w is not None:
+            parent = w.parentWidget()
+            if isinstance(parent, QStackedWidget) and isinstance(parent.parentWidget(), QTabWidget):
+                parent.parentWidget().setCurrentWidget(w)
+            w = parent
+        if page is self.logbox:
+            self.log_search.setFocus()
 
-    def _tab_changed(self, i):
-        if self._hjump:
-            self._hjump = False
-        elif self._history[self._hpos] != i:
-            del self._history[self._hpos + 1:]
-            self._history.append(i)
-            self._history = self._history[-50:]
-            self._hpos = len(self._history) - 1
-        self._nav_icons()
-        if self.tabs.widget(i) is self.windows_page:
+    def _page_shown(self, *_):
+        """A tab was opened: refresh what may be stale."""
+        if self.windows_page.isVisible():
             self.windows_page.refresh()
-        elif self.tabs.widget(i) is self.settings_page:
+        if self.settings_page.isVisible():
             self.settings_page.update_status()
-        elif self.tabs.widget(i) is self.activity_page:
-            self._refilter_log()
-        elif self.tabs.widget(i) is self.my_sober_page and not self.my_sober_page.dirty:
+        if self.my_sober_page.isVisible() and not self.my_sober_page.dirty:
             self.my_sober_page.load()           # Sober's own settings menu may have changed the file
 
     def reload_pages(self):
-        for p in (self.launch_page, self.windows_page, self.perf_page, self.settings_page):
+        for p in (self.launch_page, self.windows_page, self.perf_page, self.settings_page, self.auto_settings):
             p.load()
         self.restart_timers()
 
@@ -387,13 +371,12 @@ class MainWindow(AccountsMixin, LaunchMixin, LiveMixin, QMainWindow):
         theme.apply(key)
         self.update_header()
         self.model.refresh_status()
+        self.refresh_groups()                   # colour-tag swatches in the filter follow the theme
         self.table.viewport().update()
         self.on_selection()
         self.settings_page.update_status()
         self.windows_page.preview.update()
-        self._nav_icons()
         refresh_icons()
-        self.playing_as.update()
         self.log(f"Theme: {theme.current().name}.")
 
     def restart_timers(self):
@@ -404,182 +387,43 @@ class MainWindow(AccountsMixin, LaunchMixin, LiveMixin, QMainWindow):
 
 
     # ---------------------------------------------------------------- header
-    def _build_topbar(self) -> QWidget:
-        """Back / forward, the big section tabs (TOOLS = a menu of the power-user pages), and at the right the
-        update button, Activity / Settings / Help and the Home account."""
+    def _build_header(self) -> QWidget:
+        """Cellar, the live numbers (running / CPU / memory), and at the right the update button and the
+        multi-instance state."""
         bar = QWidget()
         bar.setObjectName("topbar")
         bar.setAttribute(Qt.WA_StyledBackground, True)
         h = QHBoxLayout(bar)
-        h.setContentsMargins(12, 8, 14, 0)
-        h.setSpacing(4)
-        self.back_btn = QPushButton()
-        self.fwd_btn = QPushButton()
-        for b, ic, fn, tip in ((self.back_btn, "chevron-left", self.go_back, "Back (Alt+Left)"),
-                               (self.fwd_btn, "chevron-right", self.go_forward, "Forward (Alt+Right)")):
-            b.setObjectName("navarrow")
-            b.setToolTip(tip)
-            b.setIconSize(QSize(20, 20))
-            b.clicked.connect(fn)
-            h.addWidget(b, 0, Qt.AlignVCenter)
-        h.addSpacing(8)
+        h.setContentsMargins(16, 8, 16, 8)
+        h.setSpacing(28)
+        brand = QHBoxLayout()
+        brand.setSpacing(8)
         logo = QLabel()
-        logo.setPixmap(app_icon().pixmap(30, 30))
-        h.addWidget(logo, 0, Qt.AlignVCenter)
+        logo.setPixmap(app_icon().pixmap(34, 34))
+        brand.addWidget(logo)
         name = QLabel(APP_NAME)
         name.setObjectName("brand")
-        h.addWidget(name, 0, Qt.AlignVCenter)
-        h.addSpacing(22)
-
-        self.nav = QButtonGroup(self)
-        self.nav.setExclusive(False)
-        self.nav_buttons = []                   # (button, icon name, page index) - corner ones have icons
-        tools = QMenu(self)
-        self.tools_btn = QPushButton("TOOLS")
-        for i, (text, icon_name, page, where) in enumerate(self.nav_items):
-            if where == "main":
-                b = QPushButton(text.upper())
-                b.setObjectName("topnav")
-                b.setCheckable(True)
-                b.clicked.connect(lambda _=False, page=page: self.show_page(page))
-                self.nav_buttons.append((b, "", i))
-                h.addWidget(b)
-            elif where == "tools":
-                a = tools.addAction(text, lambda page=page: self.show_page(page))
-                a.setData(icon_name)
-        tools.addSeparator()
-        tools.addAction("Screen wall", self.open_screen_wall)
-        self.tools_menu = tools
-        self.tools_btn.setObjectName("topnav")
-        self.tools_btn.setCheckable(True)
-        self.tools_btn.clicked.connect(lambda: (self.tools_btn.setChecked(self._on_tool_page()),
-                                                tools.exec(self.tools_btn.mapToGlobal(
-                                                    self.tools_btn.rect().bottomLeft()))))
-        h.addWidget(self.tools_btn)
+        brand.addWidget(name)
+        h.addLayout(brand)
+        self.stat_run = StatBlock("Running", "Accounts running now / all your accounts.")
+        self.stat_cpu = StatBlock("CPU", "CPU used by everything Cellar runs for your accounts: their Sober clients,\n"
+                                         "network helpers and invisible screens. 100% = every core of this PC busy.")
+        self.stat_mem = StatBlock("Memory", "Memory used by the same, from the kernel's own accounting\n"
+                                            "(file cache the kernel can drop at once is not counted).")
+        for st in (self.stat_run, self.stat_cpu, self.stat_mem):
+            h.addWidget(st)
         h.addStretch(1)
-
         self.versions = ""          # "Sober 1.x · Roblox 2.x", filled in by startup()
         self.update_btn = btn("", self.show_update, primary=True)
         self.update_btn.setVisible(False)
         self.new_release = None
         h.addWidget(self.update_btn, 0, Qt.AlignVCenter)
-        for i, (text, icon_name, page, where) in enumerate(self.nav_items):
-            if where == "corner":
-                b = QPushButton()
-                b.setObjectName("corner")
-                b.setCheckable(True)
-                b.setToolTip(text)
-                b.setIconSize(QSize(20, 20))
-                b.clicked.connect(lambda _=False, page=page: self.show_page(page))
-                self.nav_buttons.append((b, icon_name, i))
-                h.addWidget(b, 0, Qt.AlignVCenter)
-        h.addSpacing(8)
-        self.me = AccountChip()
-        self.me.clicked.connect(self._me_menu)
-        h.addWidget(self.me, 0, Qt.AlignVCenter)
-        self._nav_icons()
-        return bar
-
-    def _build_bottombar(self) -> QWidget:
-        """+ Add account, the newest message, the live numbers, who plays and friends online."""
-        bar = QWidget()
-        bar.setObjectName("bottombar")
-        bar.setAttribute(Qt.WA_StyledBackground, True)
-        h = QHBoxLayout(bar)
-        h.setContentsMargins(12, 3, 12, 3)
-        h.setSpacing(14)
-        add = QPushButton("  Add account")
-        add.setObjectName("barbtn")
-        add.setIcon(theme.icon("plus", "muted"))
-        add.clicked.connect(lambda: self.add_menu.exec(add.mapToGlobal(add.rect().topLeft())
-                                                        - QPoint(0, self.add_menu.sizeHint().height())))
-        self._bar_add = add
-        h.addWidget(add)
-        self.status_line = QPushButton("")
-        self.status_line.setObjectName("statusline")
-        self.status_line.setCursor(Qt.PointingHandCursor)
-        self.status_line.setToolTip("The newest message - click for all of them (Activity)")
-        self.status_line.clicked.connect(lambda: self.show_page(self.activity_page))
-        h.addWidget(self.status_line, 1)
-        self.stat_run = MiniStat("Running", "Accounts running now / all your accounts.")
-        self.stat_cpu = MiniStat("CPU", "CPU used by everything Cellar runs for your accounts: their Sober clients,\n"
-                                        "network helpers and invisible screens. 100% = every core of this PC busy.")
-        self.stat_mem = MiniStat("Memory", "Memory used by the same, from the kernel's own accounting\n"
-                                           "(file cache the kernel can drop at once is not counted).")
-        for st in (self.stat_run, self.stat_cpu, self.stat_mem):
-            h.addWidget(st)
         self.st_multi = QLabel()
         self.st_multi.setObjectName("pill")
         self.st_multi.setToolTip("Multi-instance gives every account its own isolated Sober, so many can run at "
                                  "once (Settings).")
-        h.addWidget(self.st_multi)
-        self.st_multi_sub = QLabel()            # its text goes into the pill's tooltip (no room in the bar)
-        self.st_multi_sub.setVisible(False)
-        self.playing_as = PlayingAs(compact=True)
-        self.playing_as.clicked.connect(lambda: self.show_page(self.accounts_page))
-        h.addWidget(self.playing_as)
-        self.friends_btn = QPushButton("Friends")
-        self.friends_btn.setObjectName("barbtn")
-        self.friends_btn.setIcon(theme.icon("users", "muted"))
-        self.friends_btn.clicked.connect(lambda: self.show_page(self.nav_items[3][2]))
-        h.addWidget(self.friends_btn)
+        h.addWidget(self.st_multi, 0, Qt.AlignVCenter)
         return bar
-
-    def _on_tool_page(self) -> bool:
-        i = self.tabs.currentIndex()
-        return self.nav_items[i][3] == "tools"
-
-    def _nav_icons(self):
-        i = self.tabs.currentIndex()
-        for b, name, idx in self.nav_buttons:
-            b.setChecked(idx == i)
-            if name:
-                b.setIcon(theme.icon(name, "accent" if idx == i else "muted"))
-        self.tools_btn.setChecked(self._on_tool_page())
-        for a in self.tools_menu.actions():
-            if a.data():
-                a.setIcon(theme.icon(a.data(), "text"))
-        self.back_btn.setIcon(theme.icon("chevron-left", "text" if self._hpos > 0 else "muted"))
-        self.fwd_btn.setIcon(theme.icon("chevron-right", "text" if self._hpos < len(self._history) - 1 else "muted"))
-        self.back_btn.setEnabled(self._hpos > 0)
-        self.fwd_btn.setEnabled(self._hpos < len(self._history) - 1)
-        if hasattr(self, "_bar_add"):
-            self._bar_add.setIcon(theme.icon("plus", "muted"))
-            self.friends_btn.setIcon(theme.icon("users", "muted"))
-
-    def go_back(self):
-        if self._hpos > 0:
-            self._hpos -= 1
-            self._hjump = True
-            self.tabs.setCurrentIndex(self._history[self._hpos])
-
-    def go_forward(self):
-        if self._hpos < len(self._history) - 1:
-            self._hpos += 1
-            self._hjump = True
-            self.tabs.setCurrentIndex(self._history[self._hpos])
-
-    def _me_menu(self):
-        m = QMenu(self)
-        a = self.home_page.home_account()
-        if a:
-            m.addAction(f"View {a.name}'s profile", lambda: self.show_profile(a))
-            m.addSeparator()
-        sub = m.addMenu("Home account (friends, favourites)")
-        for acc in [x for x in store.accounts if x.user_id and x.cookie]:
-            act = sub.addAction(acc.name, lambda acc=acc: self.set_home_account(acc))
-            act.setCheckable(True)
-            act.setChecked(a is not None and acc.id == a.id)
-        m.addAction("Add account...", self.add_browser)
-        m.addSeparator()
-        m.addAction("Settings", lambda: self.show_page(self.settings_page.parentWidget()))
-        m.exec(self.me.mapToGlobal(self.me.rect().bottomLeft()))
-
-    def set_home_account(self, a: Account):
-        i = self.home_page.acc.findData(a.id)
-        if i >= 0:
-            self.home_page.acc.setCurrentIndex(i)
-        self.me.set_account(a)
 
     def startup(self):
         s = store.settings
@@ -647,7 +491,7 @@ class MainWindow(AccountsMixin, LaunchMixin, LiveMixin, QMainWindow):
         s = store.settings
         s.win_w, s.win_h = self.width(), self.height()
         s.split = self.hsplit.sizes()
-        s.ui_tab = self.tabs.currentIndex()
+        s.split_v = self.vsplit.sizes()
         s.ui_sort = self.sort.currentData() or "Manual"
         s.ui_header = bytes(self.table.horizontalHeader().saveState().toBase64()).decode()
         store.save_settings()
@@ -658,8 +502,7 @@ class MainWindow(AccountsMixin, LaunchMixin, LiveMixin, QMainWindow):
         i = self.sort.findData(s.ui_sort)
         if i >= 0:
             self.sort.setCurrentIndex(i)
-        if 0 <= s.ui_tab < self.tabs.count():
-            self.tabs.setCurrentIndex(s.ui_tab)
+        self.tabs.setCurrentIndex(0)            # always start on Launch
         if s.ui_header:
             from PySide6.QtCore import QByteArray
             self.table.horizontalHeader().restoreState(QByteArray.fromBase64(s.ui_header.encode()))
@@ -719,14 +562,6 @@ class MainWindow(AccountsMixin, LaunchMixin, LiveMixin, QMainWindow):
     def open_palette(self):
         from .palette import Palette
         Palette(self).exec()
-
-    def mousePressEvent(self, e):           # the mouse's own back / forward buttons
-        if e.button() == Qt.BackButton:
-            self.go_back()
-        elif e.button() == Qt.ForwardButton:
-            self.go_forward()
-        else:
-            super().mousePressEvent(e)
 
     def resizeEvent(self, e):
         super().resizeEvent(e)

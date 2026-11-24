@@ -1,95 +1,476 @@
-"""Launch and Servers pages."""
+"""The Launch tab: where the selected accounts go, and the launch bar.
+
+It also holds what Cellar keeps from the old Home tab - only what helps launching: your games (recent + the main
+account's favourites), saved private servers, friends to follow, the server picker and the join history.
+Browsing Roblox itself is roblox.com's job (with RoValra); its Play button comes back here (playlink.py).
+"""
 
 import random
+import time
+from typing import List, Optional
 
-from PySide6.QtCore import QTimer
-from PySide6.QtGui import QCursor, QGuiApplication
-from PySide6.QtWidgets import (QButtonGroup, QComboBox, QDialog, QLabel, QLineEdit, QRadioButton, QVBoxLayout,
-                               QWidget, QCheckBox)
+from PySide6.QtCore import QRect, QRectF, QSize, Qt, Signal
+from PySide6.QtGui import QColor, QFont, QFontMetrics, QGuiApplication, QIcon, QPainter, QPainterPath, QPixmap
+from PySide6.QtWidgets import (QAbstractItemView, QButtonGroup, QHBoxLayout, QLabel, QLineEdit, QListWidget,
+                               QListWidgetItem, QMenu, QPushButton, QSizePolicy, QStackedWidget, QStyle,
+                               QStyledItemDelegate, QVBoxLayout, QWidget)
 
-from .. import api, store, theme, util
-from ..models import LaunchSpec
+from .. import api, games, paths, playlink, store, theme, util
+from ..games import Game
+from ..models import Account, LaunchSpec, PrivateServer
 from ..specs import LaunchForm
-from .common import bg, btn, chk, group, hint, row, spin
-from .dialogs import GamePicker, ServerPicker, ServerTable
+from .common import Dialog, bg, btn, chk, hint, popup, row, spin, warn
+from .dialogs import GamePicker, ServerPicker
+from .widgets import eyebrow
+
+
+# ---------------------------------------------------------------- "Play with..." (game tiles, history, links)
+def play_menu(mw, parent: QWidget, spec: LaunchSpec, title: str = "") -> QMenu:
+    """Who plays: the selected accounts, the main account, anyone / a group, or your normal Sober.
+    Show it with common.popup()."""
+    m = QMenu(parent)
+    sel = mw.selected_accounts()
+    main = mw.main_account()
+
+    def go(accs: List[Account]):
+        if accs:
+            mw.log(f"Playing {title or spec.describe()} with {', '.join(a.name for a in accs[:4])}"
+                   + (f" and {len(accs) - 4} more" if len(accs) > 4 else "") + ".")
+            mw.start_launch(accs, fixed=spec, allow_saved=False)
+
+    if sel:
+        m.addAction(f"Play with the {len(sel)} selected account(s)" if len(sel) > 1 else f"Play with {sel[0].name}",
+                    lambda: go(sel))
+    if main and main not in sel:
+        m.addAction(f"Play with {main.name}", lambda: go([main]))
+    sub = m.addMenu("Play with...")
+    for a in store.accounts:
+        sub.addAction(a.name, lambda a=a: go([a]))
+    groups = sorted({a.group for a in store.accounts if a.group})
+    if groups:
+        sub.addSeparator()
+        for g in groups:
+            accs = [a for a in store.accounts if a.group == g]
+            sub.addAction(f"Group '{g}' ({len(accs)})", lambda accs=accs: go(accs))
+    if not store.accounts:
+        sub.addAction("(add an account first)").setEnabled(False)
+
+    def in_sober():
+        bg(playlink.play_in_main_sober, spec,
+           done=lambda err: warn(parent, "Play", err) if err else mw.log(f"Started {title or 'the game'} in your "
+                                                                         "normal Sober."))
+    m.addAction("Play in my normal Sober", in_sober)
+    if spec.place_id:
+        m.addSeparator()
+        m.addAction("Servers...", lambda: mw.open_servers(spec.place_id))
+        m.addAction("Open on roblox.com", lambda: open_url(f"https://www.roblox.com/games/{spec.place_id}"))
+        m.addAction("Copy game link", lambda: QGuiApplication.clipboard().setText(
+            f"https://www.roblox.com/games/{spec.place_id}"))
+    return m
+
+
+def open_url(url: str) -> None:
+    from PySide6.QtCore import QUrl
+    from PySide6.QtGui import QDesktopServices
+    QDesktopServices.openUrl(QUrl(url))
+
+
+def private_spec(ps: PrivateServer) -> LaunchSpec:
+    share = util.share_code_of(ps.link)
+    if share:               # resolved per account when it launches (each account must be allowed in)
+        return LaunchSpec(kind="Private", place_id=ps.place_id, share_code=share)
+    return LaunchSpec(kind="Private", place_id=ps.place_id, link_code=util.private_link_code(ps.link))
+
+
+# ---------------------------------------------------------------- your games
+def _recent_games(place_ids: List[int]) -> List[Game]:
+    """Worker: recent places -> games with names / players / icons, one per game (sub-places of the same game,
+    e.g. a lobby and its match server, show once)."""
+    gs = games.from_places(place_ids)
+    games.fetch_icons([g.universe_id for g in gs])
+    return gs
+
+
+def _favourite_games(user_id: int, cookie: str) -> List[Game]:
+    gs = games.favourites(user_id, cookie)
+    games.fetch_icons([g.universe_id for g in gs])
+    return gs
+
+
+def _friend_avatars(user_ids: List[int]) -> int:
+    """Worker: head shots of friends not cached yet (same cache as the accounts' own)."""
+    need = [u for u in dict.fromkeys(user_ids) if u > 0 and not (paths.AVATAR_DIR / f"{u}.png").exists()]
+    if not need:
+        return 0
+    paths.AVATAR_DIR.mkdir(parents=True, exist_ok=True)
+    n = 0
+    for uid, url in api.avatar_urls(need).items():
+        data = api.download(url)
+        if data:
+            tmp = paths.AVATAR_DIR / f".{uid}.png.part"
+            try:
+                tmp.write_bytes(data)
+                tmp.replace(paths.AVATAR_DIR / f"{uid}.png")
+                n += 1
+            except OSError:
+                pass
+    return n
+
+
+def _two_lines(text: str, fm: QFontMetrics, width: int) -> List[str]:
+    """A name on at most two lines (the second one elided)."""
+    words, line = text.split(), ""
+    for i, w in enumerate(words):
+        test = (line + " " + w).strip()
+        if fm.horizontalAdvance(test) <= width:
+            line = test
+            continue
+        if not line:                    # one very long word
+            return [fm.elidedText(text, Qt.ElideRight, width)]
+        return [line, fm.elidedText(" ".join(words[i:]), Qt.ElideRight, width)]
+    return [line]
+
+
+class _TileDelegate(QStyledItemDelegate):
+    """A game tile: its picture, the name on up to two lines and how many play it now. Painted, so a full grid
+    of games is one widget (no child widgets per tile)."""
+
+    W, H, ART = 132, 190, 112
+
+    def sizeHint(self, opt, index):
+        return QSize(self.W, self.H)
+
+    def paint(self, p: QPainter, opt, index):
+        g: Game = index.data(Qt.UserRole)
+        if g is None:
+            return
+        pm: Optional[QPixmap] = index.data(Qt.UserRole + 1)
+        p.save()
+        p.setRenderHint(QPainter.Antialiasing)
+        p.setRenderHint(QPainter.SmoothPixmapTransform)
+        r = opt.rect.adjusted(3, 3, -3, -3)
+        selected = bool(opt.state & QStyle.State_Selected)
+        if selected or opt.state & QStyle.State_MouseOver:
+            fill = QColor(theme.c("accent"))
+            fill.setAlphaF(0.16 if selected else 0.07)
+            p.setPen(theme.qc("accent") if selected else Qt.NoPen)
+            p.setBrush(fill)
+            p.drawRoundedRect(QRectF(r), 12, 12)
+        art = QRect(r.x() + (r.width() - self.ART) // 2, r.y() + 8, self.ART, self.ART)
+        clip = QPainterPath()
+        clip.addRoundedRect(QRectF(art), 10, 10)
+        p.save()
+        p.setClipPath(clip)
+        if pm is not None and not pm.isNull():
+            p.drawPixmap(art, pm)
+        else:
+            p.fillRect(art, theme.qc("raised"))
+            theme.icon("gamepad-2", "muted").paint(p, art.adjusted(36, 36, -36, -36))
+        p.restore()
+        f = QFont(opt.font)
+        f.setBold(True)
+        p.setFont(f)
+        fm = QFontMetrics(f)
+        p.setPen(theme.qc("text"))
+        y = art.bottom() + 7
+        for line in _two_lines(g.name or f"Place {g.place_id}", fm, r.width() - 12):
+            p.drawText(QRect(r.x() + 6, y, r.width() - 12, fm.height()), Qt.AlignHCenter, line)
+            y += fm.height()
+        if g.players:
+            f.setBold(False)
+            f.setPointSizeF(f.pointSizeF() * 0.9)
+            p.setFont(f)
+            text = f"●  {games.short(g.players)} playing"
+            p.setPen(theme.qc("good"))
+            p.drawText(QRect(r.x() + 6, y + 2, r.width() - 12, QFontMetrics(f).height()), Qt.AlignHCenter, text)
+        p.restore()
+
+
+class GameStrip(QWidget):
+    """Game tab: your games as big tiles - Recent (what your accounts played) or Favourites (the main account's,
+    from Roblox) - and a search field that also takes a pasted link or Place ID.
+    Click = this game, double-click = launch the selected accounts there, right-click = Play with..."""
+
+    picked = Signal(object)         # Game
+    launch = Signal(object)         # Game
+    search = Signal(str)            # text typed + Enter (a link / Place ID or words to search)
+    FAV_TTL = 600
+
+    def __init__(self, mw, names: dict):
+        super().__init__()
+        self.mw = mw
+        self.names = names              # the launch panel's place id -> name (filled from what is shown here)
+        self._favs: Optional[List[Game]] = None
+        self._favs_at = 0.0
+        self._favs_of = ""
+        self.selected_place = 0
+        v = QVBoxLayout(self)
+        v.setContentsMargins(0, 0, 0, 0)
+        v.setSpacing(8)
+        top = QHBoxLayout()
+        self.kind = QButtonGroup(self)
+        for i, text in enumerate(("Recent", "Favourites")):
+            b = QPushButton(text)
+            b.setObjectName("seg")
+            b.setCheckable(True)
+            self.kind.addButton(b, i)
+            top.addWidget(b)
+        self.kind.button(0).setChecked(True)
+        self.kind.idClicked.connect(lambda *_: self.refresh())
+        top.addSpacing(10)
+        self.find = QLineEdit()
+        self.find.setPlaceholderText("Search Roblox games, or paste a game link / Place ID  (Enter)")
+        self.find.setClearButtonEnabled(True)
+        self.find.returnPressed.connect(lambda: self.find.text().strip() and self.search.emit(self.find.text().strip()))
+        top.addWidget(self.find, 1)
+        v.addLayout(top)
+        self.note = QLabel("")
+        self.note.setObjectName("stat_sub")
+        self.note.setWordWrap(True)
+        v.addWidget(self.note)
+        self.list = QListWidget()
+        self.list.setObjectName("gametiles")
+        self.list.setViewMode(QListWidget.IconMode)
+        self.list.setFlow(QListWidget.LeftToRight)
+        self.list.setWrapping(True)
+        self.list.setResizeMode(QListWidget.Adjust)
+        self.list.setMovement(QListWidget.Static)
+        self.list.setUniformItemSizes(True)
+        self.list.setGridSize(QSize(_TileDelegate.W, _TileDelegate.H))
+        self.list.setItemDelegate(_TileDelegate(self.list))
+        self.list.setMouseTracking(True)
+        self.list.setSelectionMode(QAbstractItemView.SingleSelection)
+        self.list.setVerticalScrollMode(QAbstractItemView.ScrollPerPixel)
+        self.list.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.list.itemClicked.connect(lambda it: self.picked.emit(it.data(Qt.UserRole)))
+        self.list.itemDoubleClicked.connect(lambda it: self.launch.emit(it.data(Qt.UserRole)))
+        self.list.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.list.customContextMenuRequested.connect(self._menu)
+        v.addWidget(self.list, 1)
+        self.refresh()
+
+    def favourites_mode(self) -> bool:
+        return self.kind.checkedId() == 1
+
+    def refresh(self, force: bool = False):
+        if self.favourites_mode():
+            self._load_favourites(force)
+            return
+        ids = [e.place_id for e in store.settings.recent[:24]]
+        if not ids:
+            self._fill([], "Games your accounts play show up here. Search above, or press Play on roblox.com.")
+            return
+        # names are known already: show them at once, then pictures / player counts from the worker
+        self._fill([Game(place_id=e.place_id, universe_id=games.cached_universe(e.place_id), name=e.name)
+                    for e in store.settings.recent[:24]], "", dedupe=True)
+        bg(_recent_games, ids, done=lambda gs: not self.favourites_mode() and self._fill(gs, "", dedupe=True))
+
+    def _load_favourites(self, force: bool):
+        a = self.mw.main_account()
+        if not a:
+            self._fill([], "Add an account to see its favourite games.")
+            return
+        fresh = self._favs is not None and self._favs_of == a.id and time.time() - self._favs_at < self.FAV_TTL
+        if fresh and not force:
+            self._fill(self._favs, "")
+            return
+        self._fill([], f"Loading {a.name}'s favourites...")
+
+        def done(gs):
+            self._favs, self._favs_at, self._favs_of = gs, time.time(), a.id
+            if self.favourites_mode():
+                self._fill(gs, "" if gs else f"{a.name} has no favourite games yet - favourite games on roblox.com "
+                                             "(or pick another main account in Settings).")
+        bg(_favourite_games, a.user_id, a.cookie, done=done, err=lambda _: self._fill([], "Could not load favourites."))
+
+    def _fill(self, gs: List[Game], note: str, dedupe: bool = False):
+        self.list.clear()
+        seen = set()
+        for g in gs:
+            key = g.universe_id or -g.place_id
+            if dedupe and key in seen:
+                continue
+            seen.add(key)
+            path = games.icon_path(g.universe_id) if g.universe_id else None
+            pm = QPixmap(str(path)) if path is not None and path.exists() else None
+            it = QListWidgetItem()
+            it.setData(Qt.UserRole, g)
+            it.setData(Qt.UserRole + 1, pm)
+            it.setToolTip(g.name + (f"\n{games.short(g.players)} playing now" if g.players else "")
+                          + "\nClick: choose it · double-click: launch the selected accounts · right-click: more")
+            self.list.addItem(it)
+            self.names[g.place_id] = g.name or self.names.get(g.place_id, "")
+        self.note.setText(note)
+        self.note.setVisible(bool(note))
+        self.select_place(self.selected_place)
+
+    def select_place(self, place_id: int):
+        """Highlights the tile of the game that is chosen (if it is in the list)."""
+        self.selected_place = place_id
+        uni = games.cached_universe(place_id)
+        self.list.clearSelection()
+        for i in range(self.list.count()):
+            g = self.list.item(i).data(Qt.UserRole)
+            if g.place_id == place_id or (uni and g.universe_id == uni):
+                self.list.setCurrentRow(i)
+                return
+
+    def _menu(self, pos):
+        it = self.list.itemAt(pos)
+        if it:
+            g = it.data(Qt.UserRole)
+            popup(play_menu(self.mw, self, LaunchSpec(kind="Game", place_id=g.place_id), g.name),
+                  self.list.viewport().mapToGlobal(pos))
 
 
 class LaunchPage(QWidget):
+    """Where the selected accounts go (Game / Server / Private server / Friend tabs) and the launch bar."""
+
     def __init__(self, mw):
         super().__init__()
         self.mw = mw
+        self.names = {e.place_id: e.name for e in store.settings.recent if e.name}     # place id -> game name
         s = store.settings
         v = QVBoxLayout(self)
+        v.setContentsMargins(6, 0, 0, 0)
+        v.setSpacing(10)
+        self._place = ""                # the chosen game: a Place ID or a link (set_place / place_text)
 
         self.sel = QLabel()
         self.sel.setObjectName("selection")
         self.sel.setWordWrap(True)
         v.addWidget(self.sel)
 
-        g, f = group("Where should they go?")
+        # ---- where: one tab per kind of target
+        tabs = QHBoxLayout()
+        tabs.setSpacing(4)
         self.modes = QButtonGroup(self)
-        self.rb_game = QRadioButton("Join a game  -  Roblox picks any public server")
-        self.rb_job = QRadioButton("Join a specific server  -  put accounts into one exact server")
-        self.rb_private = QRadioButton("Join a private server")
-        self.rb_follow = QRadioButton("Follow a player")
-        for i, rb in enumerate((self.rb_game, self.rb_job, self.rb_private, self.rb_follow)):
-            self.modes.addButton(rb, i)
-            rb.toggled.connect(lambda *_: self._mode_ui())
+        self.rb_game = QPushButton("Game")
+        self.rb_job = QPushButton("Server")
+        self.rb_private = QPushButton("Private server")
+        self.rb_follow = QPushButton("Friend")
+        tips = ("Join a game - Roblox picks any public server", "Put the accounts into one exact server",
+                "Join a private server (each account must be allowed in)", "Join the server a player is in")
+        for i, (b, tip) in enumerate(zip((self.rb_game, self.rb_job, self.rb_private, self.rb_follow), tips)):
+            b.setObjectName("modetab")
+            b.setCheckable(True)
+            b.setToolTip(tip)
+            self.modes.addButton(b, i)
+            tabs.addWidget(b)
+        tabs.addStretch(1)
+        v.addLayout(tabs)
+        self.stack = QStackedWidget()
+        v.addWidget(self.stack, 1)
 
-        self.place = QComboBox()
-        self.place.setEditable(True)
-        self.place.setMinimumWidth(260)
-        self.place.lineEdit().setPlaceholderText("Place ID or roblox.com/games/... link")
-        self.place.setToolTip("Paste a number such as 920587237 or a full roblox.com/games/... link. "
-                              "Games you launched before are in the drop-down list.")
+        # Game
+        self.strip = GameStrip(mw, self.names)
+        self.strip.picked.connect(self.use_game)
+        self.strip.launch.connect(lambda g: (self.use_game(g), self.mw.launch_selected()))
+        self.strip.search.connect(self._search_or_link)
+        self.stack.addWidget(self.strip)
+
+        # Server
+        page = QWidget()
+        pv = QVBoxLayout(page)
+        pv.setContentsMargins(0, 0, 0, 0)
+        self.server_game = QLabel()
+        self.server_game.setWordWrap(True)
+        pv.addWidget(self.server_game)
         self.job = QLineEdit(s.last_job_id)
-        self.job.setPlaceholderText("xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx")
-        self.job.setMinimumWidth(300)
+        self.job.setPlaceholderText("Job ID: xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx")
+        self.job.textChanged.connect(lambda *_: self.update_launch_text())
+        self.b_pick = btn("Pick server...", self.pick_server, "The game's servers, with Quick join: the emptiest "
+                                                               "one, or a busy one with room for everyone", primary=True)
+        pv.addWidget(row(self.job, stretch=False))
+        pv.addWidget(row(self.b_pick, btn("Random", self.pick_random, "Any open public server of the game"),
+                         btn("History...", lambda: HistoryDialog(self.mw).exec(),
+                             tip="Servers your accounts joined - rejoin one")))
+        pv.addWidget(hint("Tip: right-click a running account > <b>Bring accounts to its server</b> sends the others "
+                          "into the server it is in."))
+        pv.addStretch(1)
+        self.stack.addWidget(page)
+
+        # Private server
+        page = QWidget()
+        pv = QVBoxLayout(page)
+        pv.setContentsMargins(0, 0, 0, 0)
         self.private = QLineEdit(s.last_private)
-        self.private.setPlaceholderText("...?privateServerLinkCode=...  or  roblox.com/share?code=...&type=Server")
+        self.private.setPlaceholderText("Private server link: roblox.com/share?code=...  or  ...?privateServerLinkCode=...")
+        self.private.setClearButtonEnabled(True)
+        self.private.textChanged.connect(lambda *_: self.update_launch_text())
+        self.b_ps = btn("Save...", self._save_current_private, "Keep this link in the list below, with a name")
+        pv.addWidget(row(self.private, self.b_ps, stretch=False))
+        pv.addWidget(eyebrow("Saved private servers"))
+        self.ps_list = QListWidget()
+        self.ps_list.setObjectName("plainlist")
+        self.ps_list.itemClicked.connect(lambda it: self.private.setText(it.data(Qt.UserRole).link))
+        self.ps_list.itemDoubleClicked.connect(lambda it: (self.private.setText(it.data(Qt.UserRole).link),
+                                                           self.mw.launch_selected()))
+        self.ps_list.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.ps_list.customContextMenuRequested.connect(self._private_menu)
+        pv.addWidget(self.ps_list, 1)
+        self.ps_empty = hint("Paste a private server link above and press <b>Save...</b> - it stays here for one "
+                             "click next time.")
+        pv.addWidget(self.ps_empty)
+        self.stack.addWidget(page)
+
+        # Friend
+        page = QWidget()
+        pv = QVBoxLayout(page)
+        pv.setContentsMargins(0, 0, 0, 0)
         self.follow = QLineEdit(s.last_follow)
-        self.follow.setPlaceholderText("Roblox username")
-        self.b_random = btn("Random", self.pick_random, "Pick any open public server of the game above")
-        self.b_pick = btn("Pick server...", self.pick_server, "Browse the running servers of the game above")
+        self.follow.setPlaceholderText("Roblox username - or pick a friend below")
+        self.follow.setClearButtonEnabled(True)
+        self.follow.textChanged.connect(lambda *_: self.update_launch_text())
+        self._friends_at, self._friends_of = 0.0, ""
+        self.b_friends = btn("", lambda: self.load_friends(force=True), icon="refresh-cw",
+                             tip="Reload the main account's friends (Settings > Main account)")
+        pv.addWidget(row(self.follow, self.b_friends, stretch=False))
+        self.friends_title = eyebrow("Friends online")
+        pv.addWidget(self.friends_title)
+        self.friend_list = QListWidget()
+        self.friend_list.setObjectName("plainlist")
+        self.friend_list.setIconSize(QSize(32, 32))
+        self.friend_list.itemClicked.connect(lambda it: self.follow.setText(it.data(Qt.UserRole)))
+        self.friend_list.itemDoubleClicked.connect(lambda it: (self.follow.setText(it.data(Qt.UserRole)),
+                                                               self.mw.launch_selected()))
+        pv.addWidget(self.friend_list, 1)
+        self.stack.addWidget(page)
 
-        f.addRow(self.rb_game)
-        f.addRow("Game", row(self.place, btn("Search game...", self.search_game, icon="edit-find")))
-        f.addRow(self.rb_job)
-        f.addRow("Job ID", row(self.job, self.b_random, self.b_pick))
-        f.addRow(self.rb_private)
-        f.addRow("Link", self.private)
-        f.addRow(self.rb_follow)
-        f.addRow("Player", self.follow)
-        v.addWidget(g)
-
-        g, f = group("Launch options")
+        # ---- options + the launch bar
         self.delay = spin(0, 600, s.launch_delay_sec, self._delay, " s",
                           "Starting many clients at the same instant often makes some fail to load. 6-10 s is a good default.")
-        f.addRow("Pause between accounts", self.delay)
-        self.use_saved = chk("Use each account's own game when it has one", s.use_saved_per_account, self._use_saved,
-                             "Accounts with their own game (Edit account) join it; the others use the choice above.")
-        f.addRow(self.use_saved)
-        f.addRow(btn("Save this game to the selected accounts", self.save_to_selected,
-                     "Copies the Place ID (and Job ID for 'specific server') into every selected account."))
-        v.addWidget(g)
-
-        g, f = group("Go")
+        self.use_saved = chk("Accounts with their own game go there", s.use_saved_per_account, self._use_saved,
+                             "Accounts with their own game (Edit account) join it; the others go where this panel says.")
+        more = btn("...", self._more_menu, "More")
+        self._more = more
+        v.addWidget(row(QLabel("Pause between accounts"), self.delay, self.use_saved, None, more, stretch=False))
+        bar = QWidget()
+        bar.setObjectName("launchbar")
+        bar.setAttribute(Qt.WA_StyledBackground, True)
+        bh = QHBoxLayout(bar)
+        bh.setContentsMargins(10, 10, 10, 10)
         self.b_launch = btn("Launch selected", self.mw.launch_selected, icon="play", primary=True)
-        self.b_all = btn("Launch all listed", self.mw.launch_all_listed)
+        self.b_launch.setObjectName("launchbtn")
+        self.b_launch.setMinimumHeight(38)
+        self.b_launch.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        self.b_all = btn("Launch all listed", self.mw.launch_all_listed,
+                         "Every account the list shows (search / group filter), not only the selected ones")
         self.b_stop = btn("Cancel", self.mw.stop_launch, tip="Stop a launch sequence that is still going")
         self.b_stop.setEnabled(False)
-        f.addRow(row(self.b_launch, self.b_all, self.b_stop))
+        for b in (self.b_all, self.b_stop):
+            b.setMinimumHeight(38)
+        bh.addWidget(self.b_launch, 1)
+        bh.addWidget(self.b_all)
+        bh.addWidget(self.b_stop)
+        v.addWidget(bar)
         self.queue = LaunchQueue(self.mw)
-        f.addRow(self.queue)
-        f.addRow(hint("Each account runs in its own isolated Sober profile (see Settings). "
-                      "Windows are only moved by the Windows page."))
-        v.addWidget(g)
-        v.addStretch(1)
+        v.addWidget(self.queue)
 
+        self.modes.idToggled.connect(self._mode_changed)
         {"Job": self.rb_job, "Private": self.rb_private, "Follow": self.rb_follow}.get(s.last_mode, self.rb_game).setChecked(True)
-        self.refresh_recent()
-        self.place.setCurrentText(s.last_place_id)
-        self._mode_ui()
+        self.set_place(s.last_place_id)
+        self._fill_private()
         self.update_selection([])
 
     # ------------------------------------------------------------
@@ -101,12 +482,191 @@ class LaunchPage(QWidget):
         store.settings.use_saved_per_account = v
         store.save_settings()
 
-    def _mode_ui(self):
-        self.place.setEnabled(self.rb_game.isChecked() or self.rb_job.isChecked())
-        for w in (self.job, self.b_random, self.b_pick):
-            w.setEnabled(self.rb_job.isChecked())
-        self.private.setEnabled(self.rb_private.isChecked())
-        self.follow.setEnabled(self.rb_follow.isChecked())
+    def _mode_changed(self, i: int, on: bool):
+        if not on:
+            return
+        self.stack.setCurrentIndex(i)
+        if self.rb_follow.isChecked():
+            self.load_friends()
+        self._server_game_text()
+        self.update_launch_text()
+
+    def place_text(self) -> str:
+        return self._place
+
+    def set_place(self, text) -> None:
+        """The chosen game: a Place ID or a game link."""
+        self._place = str(text or "").strip()
+        pid = util.parse_place_id(self._place)
+        self.strip.select_place(pid)
+        if pid > 0 and not self.names.get(pid):
+            def named(n, pid=pid):
+                if n:
+                    self.names[pid] = n
+                    self._server_game_text()
+                    self.update_launch_text()
+            bg(api.place_name, pid, done=named)
+        self._server_game_text()
+        self.update_launch_text()
+
+    def game_name(self) -> str:
+        pid = util.parse_place_id(self._place)
+        return self.names.get(pid) or (f"place {pid}" if pid > 0 else "")
+
+    def _server_game_text(self):
+        n = self.game_name()
+        self.server_game.setText(f"Servers of <b>{n}</b> - pick another game on the Game tab." if n else
+                                 theme.span("warn", "Pick a game on the Game tab first."))
+
+    def use_game(self, g: Game):
+        """A game from Your games / search / a link becomes the game; 'Server' keeps its tab (it picks a server
+        of this game), the other tabs switch to Game."""
+        if g.name:
+            self.names[g.place_id] = g.name
+        self.set_place(g.place_id)
+        if not self.rb_job.isChecked():
+            self.rb_game.setChecked(True)
+
+    def _search_or_link(self, text: str):
+        if util.parse_place_id(text) > 0:           # a pasted link or Place ID
+            self.set_place(text)
+            self.rb_game.setChecked(True)
+            self.strip.find.clear()
+        else:
+            self.search_game(text)
+
+    def update_launch_text(self):
+        """The launch button says what will happen: how many accounts, and where."""
+        n = len(self.mw.selected_accounts()) if hasattr(self.mw, "table") else 0
+        mode = self.mode()
+        where = ""
+        if mode == "Game":
+            where = self.game_name()
+        elif mode == "Job":
+            name = self.game_name()
+            where = f"one server of {name}" if name and self.job.text().strip() else ""
+        elif mode == "Private":
+            link = self.private.text().strip()
+            ps = next((p for p in store.settings.private_servers if p.link == link), None)
+            where = (ps.name if ps else "a private server") if link else ""
+        else:
+            name = self.follow.text().strip()
+            where = f"{name}'s server" if name else ""
+        who = "1 account" if n == 1 else f"{n} accounts"
+        if not n:
+            text = "Select accounts to launch"
+        elif where:
+            text = f"Launch {who} into {where}"
+        else:
+            text = f"Launch {who}"
+        fm = self.b_launch.fontMetrics()
+        self.b_launch.setText(fm.elidedText(text, Qt.ElideRight, max(200, self.b_launch.width() - 60)))
+        self.b_launch.setToolTip(text + ("" if n else " - click accounts in the list (Ctrl / Shift for several)"))
+
+    def resizeEvent(self, ev):
+        super().resizeEvent(ev)
+        self.update_launch_text()
+
+    def _more_menu(self):
+        m = QMenu(self)
+        m.addAction("Save this game to the selected accounts", self.save_to_selected)
+        popup(m, self._more.mapToGlobal(self._more.rect().bottomLeft()))
+
+    # ---- private servers (saved links)
+    def _fill_private(self):
+        self.ps_list.clear()
+        for ps in store.settings.private_servers:
+            game = self.names.get(ps.place_id, "") if ps.place_id else ""
+            it = QListWidgetItem(ps.name + (f"   ·   {game}" if game else ""))
+            it.setToolTip(ps.link + "\nClick: use it · double-click: launch the selected accounts · right-click: more")
+            it.setData(Qt.UserRole, ps)
+            self.ps_list.addItem(it)
+        has = bool(store.settings.private_servers)
+        self.ps_list.setVisible(has)
+        self.ps_empty.setVisible(not has)
+
+    def _save_current_private(self):
+        link = self.private.text().strip()
+        if not (util.share_code_of(link) or util.private_link_code(link)):
+            return warn(self, "Private server", "Paste a private server link first (roblox.com/share?code=... or "
+                                                "...?privateServerLinkCode=...).")
+        self._save_private(link)
+
+    def _save_private(self, link: str):
+        from PySide6.QtWidgets import QInputDialog
+        name, ok = QInputDialog.getText(self, "Save private server", "A name for it:",
+                                        text=f"Private server {len(store.settings.private_servers) + 1}")
+        if not ok:
+            return
+        pid = util.parse_place_id(self._place)
+        store.settings.private_servers.append(PrivateServer(max(0, pid), name.strip() or "Private server", link))
+        store.save_settings()
+        self._fill_private()
+        self.update_launch_text()
+        self.mw.log(f"Saved private server '{name.strip() or 'Private server'}'.")
+
+    def _private_menu(self, pos):
+        it = self.ps_list.itemAt(pos)
+        if not it:
+            return
+        ps = it.data(Qt.UserRole)
+        m = play_menu(self.mw, self, private_spec(ps), ps.name)
+        m.addSeparator()
+        m.addAction("Copy link", lambda: QGuiApplication.clipboard().setText(ps.link))
+        m.addAction("Remove", lambda: self._remove_private(ps))
+        popup(m, self.ps_list.viewport().mapToGlobal(pos))
+
+    def _remove_private(self, ps: PrivateServer):
+        store.settings.private_servers.remove(ps)
+        store.save_settings()
+        self._fill_private()
+
+    # ---- friends to follow (the main account's)
+    def main_account_changed(self):
+        self._friends_at = 0.0
+        self.strip.refresh()
+        if self.rb_follow.isChecked():
+            self.load_friends()
+
+    def load_friends(self, force: bool = False):
+        a = self.mw.main_account()
+        if not a:
+            self.friends_title.setText("Add an account to see its friends here".upper())
+            return
+        if not force and self._friends_of == a.id and time.time() - self._friends_at < 60:
+            return
+        self._friends_at, self._friends_of = time.time(), a.id
+        self.b_friends.setEnabled(False)
+        self.friends_title.setText(f"Loading {a.name}'s friends...".upper())
+
+        def done(res):
+            self.b_friends.setEnabled(True)
+            fr, err = res
+            if err:
+                self.friends_title.setText(f"Could not load {a.name}'s friends: {err}".upper())
+                return
+            order = {2: 0, 1: 1, 3: 2, 0: 3}             # in game, online, in Studio, offline
+            fr = sorted((f for f in fr if f.presence and f.presence.type), key=lambda f: (
+                order.get(f.presence.type, 3), (f.display_name or f.name).lower()))
+            self._show_friends(fr)
+            self.friends_title.setText((f"{a.name}'s friends online - {len(fr)}" if fr else
+                                        f"None of {a.name}'s friends is online right now").upper())
+            bg(_friend_avatars, [f.user_id for f in fr[:80]], done=lambda n: n and self._show_friends(fr))
+        bg(api.friends, a.cookie, a.user_id, done=done, err=lambda _: self.b_friends.setEnabled(True))
+
+    def _show_friends(self, fr):
+        self.friend_list.clear()
+        for f in fr:
+            who = f.display_name if f.display_name and f.display_name != f.name else f.name
+            t = f.presence.type
+            where = (f"playing {f.presence.location}" if t == 2 and f.presence.location else
+                     "in a game" if t == 2 else "in Studio" if t == 3 else "online")
+            path = paths.AVATAR_DIR / f"{f.user_id}.png"
+            it = QListWidgetItem(QIcon(str(path)) if path.exists() else QIcon(), f"{who}  (@{f.name})   ·   {where}")
+            it.setForeground(theme.qc("text" if t == 2 else "muted"))
+            it.setData(Qt.UserRole, f.name)
+            it.setToolTip("Click: follow them · double-click: launch the selected accounts into their server")
+            self.friend_list.addItem(it)
 
     def set_launching(self, on: bool):
         self.b_launch.setEnabled(not on)
@@ -121,15 +681,16 @@ class LaunchPage(QWidget):
             names = ", ".join(a.name for a in sel[:4]) + (f" ... (+{len(sel) - 4})" if len(sel) > 4 else "")
             self.sel.setText(theme.span("good", "●") + f"&nbsp; <b>{len(sel)} selected</b>"
                              + theme.span("muted", f"&nbsp; {names}"))
+        self.update_launch_text()
 
     def refresh_recent(self):
-        keep = self.place.currentText()
-        self.place.blockSignals(True)
-        self.place.clear()
-        for g in store.settings.recent:
-            self.place.addItem(f"{g.place_id}  -  {g.name or '(unknown name)'}")
-        self.place.setCurrentText(keep)
-        self.place.blockSignals(False)
+        for e in store.settings.recent:
+            if e.name:
+                self.names[e.place_id] = e.name
+        if not self.strip.favourites_mode():
+            self.strip.refresh()
+        self._server_game_text()
+        self.update_launch_text()
 
     def mode(self) -> str:
         return ("Job" if self.rb_job.isChecked() else "Private" if self.rb_private.isChecked()
@@ -137,8 +698,8 @@ class LaunchPage(QWidget):
 
     def read_form(self) -> LaunchForm:
         """Snapshot of the form; also remembers it in the settings."""
-        f = LaunchForm(self.mode(), self.place.currentText().strip(), self.job.text().strip(),
-                       self.private.text().strip(), self.follow.text().strip())
+        f = LaunchForm(self.mode(), self._place, self.job.text().strip(), self.private.text().strip(),
+                       self.follow.text().strip())
         s = store.settings
         s.last_mode, s.last_place_id, s.last_job_id, s.last_private, s.last_follow = f.mode, f.place, f.job, f.private, f.follow
         store.save_settings()
@@ -147,7 +708,7 @@ class LaunchPage(QWidget):
     def load(self):
         s = store.settings
         {"Job": self.rb_job, "Private": self.rb_private, "Follow": self.rb_follow}.get(s.last_mode, self.rb_game).setChecked(True)
-        self.place.setCurrentText(s.last_place_id)
+        self.set_place(s.last_place_id)
         self.job.setText(s.last_job_id)
         self.private.setText(s.last_private)
         self.follow.setText(s.last_follow)
@@ -160,30 +721,32 @@ class LaunchPage(QWidget):
         self.use_saved.blockSignals(False)
 
     # ------------------------------------------------------------ actions
-    def search_game(self):
-        d = GamePicker(self, self.mw.any_cookie())
+    def search_game(self, query: str = ""):
+        d = GamePicker(self, self.mw.any_cookie(), query)
         if d.exec() and d.result:
-            self.place.setCurrentText(str(d.result.place_id))
-            if self.rb_private.isChecked() or self.rb_follow.isChecked():
+            self.names[d.result.place_id] = d.result.name
+            self.set_place(d.result.place_id)
+            if not self.rb_job.isChecked():
                 self.rb_game.setChecked(True)
+            self.strip.find.clear()
             self.mw.log(f"Game selected: {d.result.name} ({d.result.place_id}).")
             self.mw.add_recent(d.result.place_id, d.result.name)
 
     def pick_server(self):
-        pid = util.parse_place_id(self.place.currentText())
+        pid = util.parse_place_id(self._place)
         if pid <= 0:
-            self.mw.log("Choose a game first: type its Place ID or press 'Search game...'.")
+            self.mw.log("Choose a game first (Game tab: Your games, or search).")
             return
-        d = ServerPicker(self, pid, self.mw.any_cookie())
+        d = ServerPicker(self, pid, self.mw.any_cookie(), need=max(1, len(self.mw.selected_accounts())))
         if d.exec() and d.result:
             self.job.setText(d.result)
             self.rb_job.setChecked(True)
             self.mw.log("Server selected: " + d.result)
 
     def pick_random(self):
-        pid = util.parse_place_id(self.place.currentText())
+        pid = util.parse_place_id(self._place)
         if pid <= 0:
-            self.mw.log("Enter a Place ID first.")
+            self.mw.log("Choose a game first (Game tab: Your games, or search).")
             return
         self.mw.log(f"Looking up servers of place {pid}...")
 
@@ -205,7 +768,7 @@ class LaunchPage(QWidget):
         if not sel:
             self.mw.log("Select one or more accounts first.")
             return
-        pid = util.parse_place_id(self.place.currentText())
+        pid = util.parse_place_id(self._place)
         for a in sel:
             a.saved_place_id = str(pid) if pid else ""
             a.game_link = f"https://www.roblox.com/games/{pid}" if pid else ""
@@ -215,143 +778,7 @@ class LaunchPage(QWidget):
         self.mw.log(f"Saved Place {pid or '(none)'} to {len(sel)} account(s).")
 
 
-class ServersPage(QWidget):
-    def __init__(self, mw):
-        super().__init__()
-        self.mw = mw
-        self.cursor = ""
-        self.all = []
-        v = QVBoxLayout(self)
-        v.addWidget(hint("Browse the public servers of a game and put the selected accounts into the <b>same</b> server."))
-        self.place = QLineEdit(store.settings.last_place_id)
-        self.place.setPlaceholderText("Place ID or game link")
-        self.place.setMinimumWidth(320)
-        self.place.returnPressed.connect(lambda: self.load(False))
-        self.order = QComboBox()
-        self.order.addItem("Most players first", False)
-        self.order.addItem("Fewest players first", True)
-        self.hide_full = QCheckBox("Hide full servers")
-        self.hide_full.setChecked(True)
-        self.hide_full.toggled.connect(lambda *_: self._show())
-        v.addWidget(row(QLabel("Game"), self.place, btn("Search game...", self.search_game, icon="search")))
-        self.game_name = QLabel("")
-        self.game_name.setObjectName("page_sub")
-        v.addWidget(self.game_name)
-        self.auto = QCheckBox("Refresh every 30 s")
-        self.auto.toggled.connect(lambda on: self.timer.start(30000) if on else self.timer.stop())
-        self.timer = QTimer(self, timeout=lambda: self.isVisible() and self.load(False, quiet=True))
-        v.addWidget(row(self.order, btn("Load servers", lambda: self.load(False), icon="refresh-cw"),
-                        btn("Load more", lambda: self.load(True)), self.hide_full, self.auto))
-        v.addWidget(row(QLabel("Quick join:"),
-                        btn("Emptiest server", lambda: self.quick("empty"),
-                            tip="The server with the fewest players that still has room for everyone you send"),
-                        btn("Busy server with room for everyone", lambda: self.quick("busy"),
-                            tip="The fullest server that still has a free slot for each account you send")))
-        self.table = ServerTable()
-        self.table.doubleClicked.connect(lambda *_: self.join())
-        v.addWidget(self.table, 1)
-        self.status = QLabel("")
-        v.addWidget(self.status)
-        v.addWidget(row(btn("Join", self.join, icon="play", primary=True,
-                            tip="The selected accounts join this server (or pick who, when none is selected)"),
-                        btn("Use on Accounts page", self.use_on_launch),
-                        btn("Copy Job ID", self.copy_job),
-                        btn("History...", lambda: HistoryDialog(self.mw).exec(),
-                            tip="Servers your accounts joined - rejoin one")))
-
-    def search_game(self):
-        d = GamePicker(self, self.mw.any_cookie())
-        if d.exec() and d.result:
-            self.place.setText(str(d.result.place_id))
-            self.load(False)
-
-    def load(self, more: bool, quiet: bool = False, then=None):
-        pid = util.parse_place_id(self.place.text())
-        if pid <= 0:
-            self.status.setText("Enter a Place ID or game link.")
-            return
-        if more and not self.cursor:
-            self.status.setText("No more servers.")
-            return
-        if not quiet:
-            self.status.setText("Loading...")
-        if pid != getattr(self, "_named", 0):
-            self._named = pid
-            self.game_name.setText("")
-            bg(api.place_name, pid, done=lambda n: self.game_name.setText(n or ""))
-
-        def done(sp):
-            if sp.error:
-                self.status.setText(sp.error)
-                return
-            self.cursor = sp.next
-            self.all = (self.all if more else []) + sp.servers
-            self._show()
-            if then:
-                then()
-        bg(api.servers, pid, bool(self.order.currentData()), self.cursor if more else "", self.mw.any_cookie(), done=done)
-
-    def quick(self, mode: str):
-        """Picks a server for the accounts you send and joins it (loads the right list first)."""
-        want_asc = mode == "empty"
-        if bool(self.order.currentData()) != want_asc or not self.all:
-            self.order.setCurrentIndex(self.order.findData(want_asc))
-            return self.load(False, then=lambda: self.quick(mode))
-        n = max(1, len(self.mw.selected_accounts()))
-        fits = [x for x in self.all if x.max - x.playing >= n]
-        if not fits:
-            self.status.setText(f"No loaded server has {n} free slot(s) - press Load more.")
-            return
-        pick = min(fits, key=lambda x: x.playing) if mode == "empty" else max(fits, key=lambda x: x.playing)
-        self.status.setText(f"Picked a server with {pick.playing}/{pick.max} players.")
-        self._join_job(pick.id)
-
-    def _show(self):
-        shown = [s for s in self.all if not (self.hide_full.isChecked() and s.playing >= s.max)]
-        self.table.fill(shown)
-        if self.all and not shown:
-            self.status.setText(f"All {len(self.all)} loaded servers are full - press Load more, choose Fewest "
-                                "players first, or untick Hide full servers.")
-        else:
-            self.status.setText(f"{len(shown)} of {len(self.all)} server(s) shown"
-                                + ("  ·  more available" if self.cursor else ""))
-
-    def join(self):
-        job = self.table.selected_job()
-        if not job:
-            self.status.setText("Load the servers and pick one first.")
-            return
-        self._join_job(job)
-
-    def _join_job(self, job: str):
-        from .home_page import play_menu
-        pid = util.parse_place_id(self.place.text())
-        if pid <= 0:
-            return
-        spec = LaunchSpec(kind="Job", place_id=pid, job_id=job)
-        if self.mw.selected_accounts():
-            self.mw.join_server(pid, job)
-        else:                                   # nobody selected: ask who should go
-            play_menu(self.mw, self, spec, "that server").exec(QCursor.pos())
-
-    def use_on_launch(self):
-        job = self.table.selected_job()
-        if not job:
-            return
-        lp = self.mw.launch_page
-        lp.place.setCurrentText(self.place.text().strip())
-        lp.job.setText(job)
-        lp.rb_job.setChecked(True)
-        self.mw.show_page(lp)
-
-    def copy_job(self):
-        job = self.table.selected_job()
-        if job:
-            QGuiApplication.clipboard().setText(job)
-            self.mw.log("Job ID copied.")
-
-
-class HistoryDialog(QDialog):
+class HistoryDialog(Dialog):
     """Join history: every server an account entered (read from its Roblox log). Rejoin any of them."""
 
     def __init__(self, mw):
@@ -396,12 +823,11 @@ class HistoryDialog(QDialog):
         return store.settings.history[r] if 0 <= r < len(store.settings.history) else None
 
     def rejoin(self):
-        from .home_page import play_menu
         h = self._rec()
         if h:
             spec = LaunchSpec(kind="Job", place_id=h.place_id, job_id=h.job_id)
-            play_menu(self.mw, self, spec, "that server").exec(self.rejoin_btn.mapToGlobal(
-                self.rejoin_btn.rect().bottomLeft()))
+            popup(play_menu(self.mw, self, spec, "that server"),
+                  self.rejoin_btn.mapToGlobal(self.rejoin_btn.rect().bottomLeft()))
 
     def copy(self):
         h = self._rec()

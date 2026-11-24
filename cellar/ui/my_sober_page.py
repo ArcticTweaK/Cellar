@@ -1,7 +1,7 @@
 """My Sober tab: settings, FPS cap, Fast Flags and repair tools for your *normal* Sober (the one in your app menu).
 
 Useful with a single account too - this is the part of Cellar that has nothing to do with multi-instance.
-Account profiles are not touched here (the Performance page manages those).
+Account profiles are not touched here (the Performance tab manages those).
 """
 
 import json
@@ -188,7 +188,7 @@ class MySoberPage(QWidget):
         inner = QWidget()
         v = QVBoxLayout(inner)
         v.addWidget(hint("Settings of your <b>normal Sober</b> - the one in your app menu. Your accounts' own "
-                         "profiles are set on the Performance page. Changes apply the next time Sober starts."))
+                         "profiles are set in the Performance tab. Changes apply the next time Sober starts."))
         self.status = QLabel()
         self.status.setWordWrap(True)
         self.status.setTextFormat(Qt.RichText)

@@ -1,16 +1,18 @@
-"""Small widgets of the main window: page titles, the sidebar's numbers and "Playing as", the account table."""
+"""Small widgets of the main window: the header's live numbers, the account table and cards, toasts, graphs."""
 
-from typing import List, Optional
+from typing import Optional
 
-from PySide6.QtCore import QPropertyAnimation, QRect, QSize, Qt, QTimer, Signal
+from PySide6.QtCore import QPropertyAnimation, QRect, QRectF, QSize, Qt, QTimer
 from PySide6.QtGui import QColor, QFont, QFontMetrics, QPainter, QPainterPath
 from PySide6.QtWidgets import (QAbstractItemView, QFrame, QGraphicsOpacityEffect, QHBoxLayout, QLabel, QListView,
                                QPushButton, QStyle, QStyledItemDelegate, QTableView, QVBoxLayout, QWidget)
 
-from .. import paths, store, theme
-from ..models import Account
+from .. import store, theme
+
+
 def _size(n: float) -> str:
     return f"{n / 2**20:.0f} MB" if n < 2**30 else f"{n / 2**30:.1f} GB"
+
 
 def eyebrow(text: str) -> QLabel:
     """A small spaced-out capital caption in the monospace font (RUNNING, CPU, ...)."""
@@ -19,106 +21,28 @@ def eyebrow(text: str) -> QLabel:
     l.setFont(theme.mono_font(7.5, 1.4))
     return l
 
-def page_frame(title: str, subtitle: str, body: QWidget) -> QWidget:
-    """A page: a big title, an optional one-line explanation, then the page itself."""
-    w = QWidget()
-    v = QVBoxLayout(w)
-    v.setContentsMargins(0, 0, 0, 0)
-    v.setSpacing(2)
-    t = QLabel(title)
-    t.setObjectName("page_title")
-    v.addWidget(t)
-    if subtitle:
-        sub = QLabel(subtitle)
-        sub.setObjectName("page_sub")
-        sub.setWordWrap(True)
-        v.addWidget(sub)
-    v.addSpacing(8)
-    v.addWidget(body, 1)
-    return w
-
-class MiniStat(QWidget):
-    """One line of the sidebar's live numbers: caption left, value right (details in the tooltip)."""
+class StatBlock(QWidget):
+    """The header's live numbers: a small caption, a big value and a line under it (RUNNING 3 / 5, in windows)."""
 
     def __init__(self, caption: str, tip: str = ""):
         super().__init__()
-        h = QHBoxLayout(self)
-        h.setContentsMargins(0, 0, 0, 0)
-        h.addWidget(eyebrow(caption))
-        h.addStretch(1)
+        v = QVBoxLayout(self)
+        v.setContentsMargins(0, 0, 0, 0)
+        v.setSpacing(0)
+        v.addWidget(eyebrow(caption))
         self.val = QLabel("-")
-        self.val.setObjectName("mini_value")
-        h.addWidget(self.val)
-        self.tip = tip
+        self.val.setObjectName("stat_value")
+        self.val.setMinimumWidth(90)
+        v.addWidget(self.val)
+        self.sub = QLabel("")
+        self.sub.setObjectName("stat_sub")
+        v.addWidget(self.sub)
         self.setToolTip(tip)
 
     def set(self, value: str, sub: str = "") -> None:
         self.val.setText(value)
-        self.setToolTip(self.tip + (f"\n\nNow: {value}" + (f" ({sub})" if sub else "")))
+        self.sub.setText(sub)
 
-class PlayingAs(QWidget):
-    """Sidebar: the accounts selected right now (what Play / Join use). Click to open Accounts."""
-
-    clicked = Signal()
-
-    def __init__(self, compact: bool = False):
-        super().__init__()
-        self.accs: List[Account] = []
-        self.compact = compact              # one line for the bottom bar: avatars + text, no caption
-        self.setFixedHeight(28 if compact else 54)
-        if compact:
-            self.setMinimumWidth(170)
-        self.setCursor(Qt.PointingHandCursor)
-
-    def set_accounts(self, accs: List[Account]):
-        self.accs = list(accs)
-        names = ", ".join(a.name for a in self.accs[:6]) + (" ..." if len(self.accs) > 6 else "")
-        self.setToolTip(("Selected: " + names) if self.accs else "No account selected - click to pick some")
-        self.update()
-
-    def mouseReleaseEvent(self, ev):
-        self.clicked.emit()
-
-    def paintEvent(self, _):
-        p = QPainter(self)
-        p.setRenderHint(QPainter.Antialiasing)
-        p.setRenderHint(QPainter.SmoothPixmapTransform)
-        if self.compact:
-            y, x, size = 3, 2, 22
-        else:
-            cap = theme.mono_font(7.5, 1.4)
-            p.setFont(cap)
-            p.setPen(theme.qc("muted"))
-            p.drawText(QRect(2, 0, self.width(), 14), Qt.AlignLeft | Qt.AlignVCenter, "PLAYING AS")
-            y, x, size = 20, 2, 30
-        if not self.accs:
-            p.setFont(self.font())
-            p.drawText(QRect(2, y, self.width() - 4, size), Qt.AlignLeft | Qt.AlignVCenter,
-                       "Playing as: nobody selected" if self.compact else "No account selected")
-            return
-        for a in self.accs[:5]:
-            r = QRect(x, y, size, size)
-            path = paths.AVATAR_DIR / f"{a.user_id}.png"
-            p.setPen(theme.qc("bg"))
-            p.setBrush(theme.qc("raised"))
-            p.drawEllipse(r)
-            if path.exists():
-                from PySide6.QtGui import QPixmap
-                clip = QPainterPath()
-                clip.addEllipse(r.adjusted(1, 1, -1, -1))
-                p.save()
-                p.setClipPath(clip)
-                p.drawPixmap(r, QPixmap(str(path)))
-                p.restore()
-            x += size - (6 if self.compact else 8)
-        x += 12 if self.compact else 14
-        p.setFont(self.font())
-        p.setPen(theme.qc("text"))
-        more = len(self.accs) - 5
-        text = self.accs[0].name if len(self.accs) == 1 else (f"+{more} more" if more > 0 else f"{len(self.accs)} accounts")
-        fm = p.fontMetrics()
-        p.drawText(QRect(x, y, self.width() - x, size), Qt.AlignLeft | Qt.AlignVCenter,
-                   fm.elidedText(text, Qt.ElideRight, self.width() - x))
 
 def _paint_empty(view) -> None:
     """The account list says what to do when it is empty instead of showing a blank box."""
@@ -144,75 +68,118 @@ def _paint_empty(view) -> None:
     p.end()
 
 
-class AccountChip(QWidget):
-    """Top bar, far right: the Home account's avatar and name (click for its menu) - like a launcher's user."""
+class _DragReorder:
+    """Drag accounts onto another account to move them before / after it (both list views). The main window sets
+    `reorder(target, after)` (moves the selected accounts) and `can_reorder()` (only in "Your order").
+    Drags from outside (cookie files, text) are ignored here, so they reach the window's import."""
 
-    clicked = Signal()
+    VERTICAL = True             # table rows: before = upper half; cards: before = left half
 
+    def _setup_drag(self):
+        self.setDragEnabled(True)
+        self.setAcceptDrops(True)
+        self.setDropIndicatorShown(False)       # our own line (the model takes no drops, Qt's would not show)
+        self.setDragDropMode(QAbstractItemView.DragDrop)
+        self.setDefaultDropAction(Qt.MoveAction)
+        self.reorder = None
+        self.can_reorder = lambda: True
+        self._drop: Optional[tuple] = None      # (target account, after)
+
+    def _target(self, pos):
+        from .accounts_model import ACCOUNT_ROLE
+        idx = self.indexAt(pos)
+        a = idx.data(ACCOUNT_ROLE) if idx.isValid() else None
+        if a is None:
+            return None
+        r = self.visualRect(idx.siblingAtColumn(0)) if self.VERTICAL else self.visualRect(idx)
+        return a, (pos.y() > r.center().y()) if self.VERTICAL else (pos.x() > r.center().x())
+
+    def _line(self) -> Optional[QRect]:
+        from .accounts_model import ACCOUNT_ROLE
+        if not self._drop:
+            return None
+        m = self.model()
+        for row in range(m.rowCount()):
+            idx = m.index(row, 0)
+            if idx.data(ACCOUNT_ROLE) is self._drop[0]:
+                r = self.visualRect(idx)
+                if self.VERTICAL:
+                    y = r.bottom() if self._drop[1] else r.top()
+                    return QRect(0, y - 1, self.viewport().width(), 3)
+                x = r.right() + 2 if self._drop[1] else r.left() - 2
+                return QRect(x - 1, r.top() + 4, 3, r.height() - 8)
+        return None
+
+    def dragEnterEvent(self, e):
+        if e.source() is self:
+            e.acceptProposedAction()
+        else:
+            e.ignore()
+
+    def dragMoveEvent(self, e):
+        if e.source() is not self:
+            e.ignore()
+            return
+        super().dragMoveEvent(e)                # auto-scroll near the edges
+        self._drop = self._target(e.position().toPoint()) if self.can_reorder() else None
+        e.setDropAction(Qt.MoveAction)
+        e.accept()
+        self.viewport().update()
+
+    def dragLeaveEvent(self, e):
+        self._drop = None
+        self.viewport().update()
+        super().dragLeaveEvent(e)
+
+    def dropEvent(self, e):
+        if e.source() is not self:
+            e.ignore()
+            return
+        drop, self._drop = self._target(e.position().toPoint()), None
+        e.setDropAction(Qt.CopyAction)          # not Move: Qt would then try to remove the dragged rows itself
+        e.accept()
+        self.viewport().update()
+        if drop and self.reorder:
+            self.reorder(*drop)
+
+    def _paint_drop(self):
+        r = self._line()
+        if r is not None:
+            p = QPainter(self.viewport())
+            p.fillRect(r, theme.qc("accent"))
+            p.end()
+
+
+class AccountTable(_DragReorder, QTableView):
     def __init__(self):
         super().__init__()
-        self.a: Optional[Account] = None
-        self.setFixedHeight(36)
-        self.setMinimumWidth(180)
-        self.setCursor(Qt.PointingHandCursor)
-        self.hover = False
+        self.setItemDelegateForColumn(0, _TagBarDelegate(self))
+        self._setup_drag()
 
-    def set_account(self, a: Optional[Account]):
-        self.a = a
-        self.setToolTip(f"Home account: {a.name}" if a else "No account yet")
-        self.update()
-
-    def enterEvent(self, _):
-        self.hover = True
-        self.update()
-
-    def leaveEvent(self, _):
-        self.hover = False
-        self.update()
-
-    def mouseReleaseEvent(self, ev):
-        self.clicked.emit()
-
-    def paintEvent(self, _):
-        p = QPainter(self)
-        p.setRenderHint(QPainter.Antialiasing)
-        p.setRenderHint(QPainter.SmoothPixmapTransform)
-        if self.hover:
-            p.setPen(Qt.NoPen)
-            p.setBrush(theme.qc("raised"))
-            p.drawRoundedRect(self.rect(), 8, 8)
-        av = QRect(6, 4, 28, 28)
-        clip = QPainterPath()
-        clip.addEllipse(av)
-        p.save()
-        p.setClipPath(clip)
-        p.fillRect(av, theme.qc("raised"))
-        if self.a and (paths.AVATAR_DIR / f"{self.a.user_id}.png").exists():
-            from PySide6.QtGui import QPixmap
-            p.drawPixmap(av, QPixmap(str(paths.AVATAR_DIR / f"{self.a.user_id}.png")))
-        p.restore()
-        f = QFont(self.font())
-        f.setBold(True)
-        p.setFont(f)
-        p.setPen(theme.qc("text"))
-        text = self.a.name if self.a else "Add an account"
-        fm = QFontMetrics(f)
-        p.drawText(QRect(42, 0, self.width() - 62, self.height()), Qt.AlignLeft | Qt.AlignVCenter,
-                   fm.elidedText(text, Qt.ElideRight, self.width() - 62))
-        p.setPen(theme.qc("muted"))
-        p.drawText(QRect(self.width() - 18, 0, 14, self.height()), Qt.AlignCenter, "▾")
-
-
-class AccountTable(QTableView):
     def paintEvent(self, ev):
         super().paintEvent(ev)
         _paint_empty(self)
+        self._paint_drop()
 
 
-class AccountCards(QListView):
-    """The account list as cards (Accounts page > Cards): same model and the same selection as the table."""
+class _TagBarDelegate(QStyledItemDelegate):
+    """Account column: the colour tag as a bar on the row's left edge, like on the cards. (A BackgroundRole
+    brush does nothing here - the style sheet's item rules win.)"""
+
+    def paint(self, p, opt, index):
+        super().paint(p, opt, index)
+        from .accounts_model import ACCOUNT_ROLE
+        a = index.data(ACCOUNT_ROLE)
+        tag = theme.tag_qc(a.color) if a is not None else None
+        if tag:
+            p.fillRect(QRect(opt.rect.x(), opt.rect.y() + 3, 4, opt.rect.height() - 6), tag)
+
+
+class AccountCards(_DragReorder, QListView):
+    """The account list as cards (Cards button above the list): same model and the same selection as the table."""
 
     W, H = 236, 88
+    VERTICAL = False
 
     def __init__(self):
         super().__init__()
@@ -227,10 +194,12 @@ class AccountCards(QListView):
         self.setMouseTracking(True)
         self.setObjectName("cards")
         self.setItemDelegate(_CardDelegate(self))
+        self._setup_drag()
 
     def paintEvent(self, ev):
         super().paintEvent(ev)
         _paint_empty(self)
+        self._paint_drop()
 
 
 class _CardDelegate(QStyledItemDelegate):
@@ -254,6 +223,14 @@ class _CardDelegate(QStyledItemDelegate):
         p.setPen(theme.qc("accent") if selected else theme.qc("border"))
         p.setBrush(bg if selected else (theme.qc("raised") if hover else theme.qc("surface")))
         p.drawRoundedRect(r, 10, 10)
+        tag = theme.tag_qc(a.color)
+        if tag:                                 # colour tag: a bar down the card's left edge
+            edge = QPainterPath()
+            edge.addRoundedRect(QRectF(r), 10, 10)
+            p.save()
+            p.setClipPath(edge)
+            p.fillRect(QRect(r.x(), r.y(), 5, r.height()), tag)
+            p.restore()
         av = QRect(r.x() + 12, r.y() + (r.height() - 48) // 2, 48, 48)
         clip = QPainterPath()
         clip.addEllipse(av)
