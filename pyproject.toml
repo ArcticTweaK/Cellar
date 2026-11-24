@@ -30,4 +30,14 @@ packages = ["cellar", "cellar.ui", "cellar.data"]
 version = { attr = "cellar.__version__" }
 
 [tool.setuptools.package-data]
-"cellar.data" = ["*.png"]
+"cellar.data" = ["*.png", "icons/*.svg", "icons/LICENSE"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py310"
+
+[tool.ruff.lint]
+# pyflakes (real bugs: unused / undefined names) + the important pycodestyle errors. Long lines are a style
+# preference here (~120, some log messages are longer), so E501 stays off.
+select = ["F", "E", "W"]
+ignore = ["E501", "E731", "E741"]

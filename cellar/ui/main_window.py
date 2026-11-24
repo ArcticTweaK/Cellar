@@ -2,73 +2,45 @@
 
 import os
 import threading
-import time
-from pathlib import Path
-from typing import List, Optional
+from typing import Optional
 
-from PySide6.QtCore import QItemSelectionModel, QSize, Qt, QTimer
+from PySide6.QtCore import QPoint, QSize, Qt, QTimer
 from PySide6.QtGui import QAction, QGuiApplication, QKeySequence, QTextCursor
-from PySide6.QtWidgets import (QAbstractItemView, QApplication, QComboBox, QFileDialog, QHBoxLayout, QHeaderView,
-                               QLabel, QLineEdit, QMainWindow, QMenu, QPlainTextEdit, QSplitter, QSystemTrayIcon,
-                               QTableView, QTabWidget, QToolButton, QVBoxLayout, QWidget)
+from PySide6.QtWidgets import (QAbstractItemView, QApplication, QButtonGroup, QComboBox, QHBoxLayout, QHeaderView,
+                               QLabel, QLineEdit, QMainWindow, QMenu, QPlainTextEdit, QPushButton, QSplitter,
+                               QStackedWidget, QSystemTrayIcon, QToolButton, QVBoxLayout, QWidget)
 
-from .. import APP_NAME, AUTHOR, __version__, antiafk, api, background, log, paths, sober, specs, store, usage, util, webhook
-from ..kwin import KWin
+from .. import APP_NAME, AUTHOR, __version__, log, paths, sober, store, theme, usage
+from .. import wm
+from ..models import Account
 from ..launcher import Launcher
-from ..models import Account, GameEntry, Instance, LaunchSpec
 from .accounts_model import ACCOUNT_ROLE, AccountFilter, AccountModel
-from .browser_login import HAVE_WEBENGINE, BrowserLogin
-from .common import app_icon, ask, bg, btn, info, ui, warn
-from .dialogs import BulkEditDialog, EditAccountDialog, PasswordDialog, PasteDialog, TextDialog
+from .common import app_icon, ask, btn, refresh_icons, row, ui
 from .friends_page import FriendsPage
 from .launch_pages import LaunchPage, ServersPage
+from .home_page import HomePage
+from .library_page import LibraryPage
+from .profile_page import ProfilePage
 from .macros_page import MacrosPage
+from .my_sober_page import MySoberPage
 from .presets_page import PresetsPage
-from .screen_viewer import ScreenViewer
 from .settings_pages import HelpPage, PerfPage, SettingsPage
 from .windows_page import WindowsPage
+from .accounts import AccountsMixin
+from .launching import LaunchMixin
+from .live import LiveMixin
+from .widgets import AccountCards, AccountChip, AccountTable, MiniStat, PlayingAs, page_frame
 
 
-def _size(n: float) -> str:
-    return f"{n / 2**20:.0f} MB" if n < 2**30 else f"{n / 2**30:.1f} GB"
-
-
-class StatBlock(QWidget):
-    """A caption, a big number and a small line under it (the header's stats)."""
-
-    def __init__(self, caption: str, tip: str = ""):
-        super().__init__()
-        v = QVBoxLayout(self)
-        v.setContentsMargins(0, 0, 0, 0)
-        v.setSpacing(0)
-        cap = QLabel(caption.upper())
-        cap.setStyleSheet("color: palette(placeholder-text); font-size: 8pt; font-weight: 600;")
-        self.val = QLabel("-")
-        self.val.setStyleSheet("font-size: 14pt; font-weight: 600;")
-        self.val.setMinimumWidth(90)
-        self.sub = QLabel("")
-        self.sub.setStyleSheet("color: palette(placeholder-text); font-size: 8pt;")
-        for w in (cap, self.val, self.sub):
-            v.addWidget(w)
-        self.setToolTip(tip)
-
-    def set(self, value: str, sub: str = "") -> None:
-        self.val.setText(value)
-        self.sub.setText(sub)
-
-
-class MainWindow(QMainWindow):
+class MainWindow(AccountsMixin, LaunchMixin, LiveMixin, QMainWindow):
     def __init__(self, start_hidden: bool = False):
         super().__init__()
         self.setWindowTitle(APP_NAME)
         self.setWindowIcon(app_icon())
         self.resize(store.settings.win_w, store.settings.win_h)
         self.launcher = Launcher()
-        self.kwin: Optional[KWin] = None
-        try:
-            self.kwin = KWin()
-        except Exception as ex:
-            log.error("KWin bridge", ex)
+        # window control: KWin on KDE Plasma, or Hyprland / Sway (wm.py) - None elsewhere
+        self.kwin = wm.pick()
         self.launching = False
         self.cancel: Optional[threading.Event] = None
         self._watcher_busy = False
@@ -78,7 +50,7 @@ class MainWindow(QMainWindow):
         # ---------------- left: accounts
         left = QWidget()
         lv = QVBoxLayout(left)
-        lv.setContentsMargins(6, 6, 0, 0)
+        lv.setContentsMargins(0, 0, 6, 0)
         top = QHBoxLayout()
         self.search = QLineEdit()
         self.search.setPlaceholderText("Search accounts...")
@@ -86,17 +58,26 @@ class MainWindow(QMainWindow):
         self.group_filter = QComboBox()
         self.group_filter.setMinimumWidth(130)
         self.sort = QComboBox()
-        for k, label in (("Manual", "Your order"), ("Name", "Name"), ("Status", "Status"), ("Last", "Last used"), ("Group", "Group")):
+        for k, label in (("Manual", "Your order"), ("Name", "Name"), ("Status", "Status"), ("Last", "Last used"), ("Group", "Group"),
+                         ("Usage", "Memory use")):
             self.sort.addItem(label, k)
         top.addWidget(self.search, 1)
         top.addWidget(self.group_filter)
         top.addWidget(self.sort)
+        self.view_btns = QButtonGroup(self)
+        for i, (name, tip) in enumerate((("Cards", "Accounts as cards"), ("Table", "Accounts as a table"))):
+            b = QPushButton(name)
+            b.setCheckable(True)
+            b.setObjectName("seg")
+            b.setToolTip(tip)
+            self.view_btns.addButton(b, i)
+            top.addWidget(b)
         lv.addLayout(top)
 
         self.model = AccountModel()
         self.proxy = AccountFilter()
         self.proxy.setSourceModel(self.model)
-        self.table = QTableView()
+        self.table = AccountTable()
         self.table.setModel(self.proxy)
         self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.table.setSelectionMode(QAbstractItemView.ExtendedSelection)
@@ -112,17 +93,31 @@ class MainWindow(QMainWindow):
         h.setSectionResizeMode(2, QHeaderView.Stretch)
         h.resizeSection(0, 210)
         h.resizeSection(1, 80)
-        h.resizeSection(3, 130)
-        h.resizeSection(4, 80)
+        h.resizeSection(3, 104)                         # Usage
+        h.resizeSection(4, 130)                         # Game
+        h.setSectionResizeMode(5, QHeaderView.ResizeToContents)     # Last used: never cut off
         self.table.setContextMenuPolicy(Qt.CustomContextMenu)
         self.table.customContextMenuRequested.connect(self.context_menu)
         self.table.doubleClicked.connect(lambda *_: self.launch_selected())
         self.table.selectionModel().selectionChanged.connect(lambda *_: self.on_selection())
-        lv.addWidget(self.table, 1)
+        self.cards = AccountCards()
+        self.cards.setModel(self.proxy)
+        self.cards.setSelectionModel(self.table.selectionModel())      # one selection for both views
+        self.cards.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.cards.customContextMenuRequested.connect(lambda pos: self.context_menu(pos, self.cards))
+        # cards are the "people" view: double-click opens the account's profile (the table keeps launch; Enter
+        # launches in both)
+        self.cards.doubleClicked.connect(lambda idx: idx.data(ACCOUNT_ROLE) and self.show_profile(idx.data(ACCOUNT_ROLE)))
+        self.cards.setToolTip("Double-click an account for its profile · Enter launches the selected accounts")
+        self.list_stack = QStackedWidget()
+        self.list_stack.addWidget(self.cards)
+        self.list_stack.addWidget(self.table)
+        self.view_btns.idClicked.connect(self.set_list_view)
+        lv.addWidget(self.list_stack, 1)
 
         add = QToolButton()
         add.setText("Add account")
-        add.setIcon(app_icon().fromTheme("list-add"))
+        add.setObjectName("add_account")
         add.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
         add.setPopupMode(QToolButton.InstantPopup)
         m = QMenu(add)
@@ -133,21 +128,27 @@ class MainWindow(QMainWindow):
         m.addAction("Paste cookies...", self.add_paste)
         m.addAction("Import cookies from a file...", self.add_file)
         m.addAction("Import the account my Sober is logged in with", self.add_from_sober)
-        m.addAction("Import Windows accounts.dat...", self.add_windows_file)
+        m.addAction("Import accounts file (Cellar export or Windows accounts.dat)...", self.add_windows_file)
+        m.addAction("Export all accounts...", lambda: self.export_accounts(list(store.accounts)))
+        m.addSeparator()
+        m.addAction("Restore from a backup...", self.restore_backup)
         add.setMenu(m)
+        self.add_menu = m
         bar = QHBoxLayout()
         bar.addWidget(add)
-        bar.addWidget(btn("Edit", self.edit_selected, icon="document-edit"))
-        bar.addWidget(btn("Remove", self.remove_selected, icon="list-remove"))
-        bar.addWidget(btn("Details", self.details_selected, icon="documentinfo"))
+        bar.addWidget(btn("Edit", self.edit_selected))
+        bar.addWidget(btn("Remove", self.remove_selected))
+        bar.addWidget(btn("Profile", lambda: self.selected_accounts() and self.show_profile(self.selected_accounts()[0]),
+                          tip="The selected account's profile page"))
         bar.addStretch(1)
-        bar.addWidget(btn("Launch", self.launch_selected, icon="media-playback-start", primary=True))
-        bar.addWidget(btn("Stop", self.stop_selected, icon="media-playback-stop"))
-        bar.addWidget(btn("Stop all", self.stop_all, icon="process-stop"))
+        bar.addWidget(btn("Stop", self.stop_selected, tip="Close the selected accounts' Roblox windows"))
+        bar.addWidget(btn("Stop all", self.stop_all, tip="Close every Roblox window Cellar started (Ctrl+Shift+S)"))
         lv.addLayout(bar)
 
-        # ---------------- right: pages
-        self.tabs = QTabWidget()
+        # ---------------- pages
+        self.home_page = HomePage(self)
+        self.library_page = LibraryPage(self)
+        self.profile_page = ProfilePage(self)
         self.launch_page = LaunchPage(self)
         self.servers_page = ServersPage(self)
         self.windows_page = WindowsPage(self)
@@ -156,50 +157,90 @@ class MainWindow(QMainWindow):
         self.macros_page = MacrosPage(self)
         self.friends_page = FriendsPage(self)
         self.settings_page = SettingsPage(self)
+        self.my_sober_page = MySoberPage(self)
         self.help_page = HelpPage(self)
         self.viewers = {}
-        for page, name, icon in ((self.launch_page, "Launch", "media-playback-start"), (self.friends_page, "Friends", "system-users"),
-                                 (self.servers_page, "Servers", "network-server"),
-                                 (self.windows_page, "Windows", "view-grid"), (self.perf_page, "Performance", "speedometer"),
-                                 (self.presets_page, "Presets", "bookmarks"), (self.macros_page, "Macros", "media-record"),
-                                 (self.settings_page, "Settings", "configure"), (self.help_page, "Help", "help-contents")):
-            self.tabs.addTab(page, app_icon().fromTheme(icon), name)
-        self.tabs.currentChanged.connect(self._tab_changed)
 
-        # ---------------- log
+        # Accounts = the account list and the launch panel side by side (the power-user screen)
+        self.hsplit = QSplitter(Qt.Horizontal)
+        self.hsplit.addWidget(left)
+        self.hsplit.addWidget(self.launch_page)
+        self.hsplit.setStretchFactor(0, 1)
+        self.hsplit.setStretchFactor(1, 1)
+        self.hsplit.setSizes(store.settings.split[:2] if len(store.settings.split) >= 2 else [620, 620])
+        self.accounts_page = page_frame("Accounts", "Select accounts (Ctrl / Shift for several), choose where they "
+                                        "go, and launch.", self.hsplit)
+
+        # Activity = the log (the status line at the bottom shows its newest line)
         self.logview = QPlainTextEdit()
+        self.logview.setObjectName("log")
+        self.logview.setFont(theme.mono_font(max(7.5, self.font().pointSizeF() - 1)))
         self.logview.setReadOnly(True)
         self.logview.setMaximumBlockCount(3000)
-        self.logview.setMinimumHeight(70)
+        act = QWidget()
+        av = QVBoxLayout(act)
+        av.setContentsMargins(0, 0, 0, 0)
+        av.addWidget(self.logview, 1)
+        av.addWidget(row(btn("Copy", lambda: QGuiApplication.clipboard().setText(self.logview.toPlainText())),
+                         btn("Open log file", lambda: sober.open_folder(paths.LOG_FILE.parent)),
+                         btn("Clear", self.logview.clear)))
+        self.activity_page = page_frame("Activity", "Everything Cellar did, newest at the bottom.", act)
 
-        hsplit = QSplitter(Qt.Horizontal)
-        hsplit.addWidget(left)
-        hsplit.addWidget(self.tabs)
-        hsplit.setStretchFactor(0, 1)
-        hsplit.setStretchFactor(1, 1)
-        vsplit = QSplitter(Qt.Vertical)
-        vsplit.addWidget(hsplit)
-        vsplit.addWidget(self.logview)
-        vsplit.setStretchFactor(0, 5)
-        vsplit.setStretchFactor(1, 1)
-        if len(store.settings.split) == 4:
-            hsplit.setSizes(store.settings.split[:2])
-            vsplit.setSizes(store.settings.split[2:])
-        else:
-            hsplit.setSizes([560, 760])
-            vsplit.setSizes([640, 150])
-        self.hsplit, self.vsplit = hsplit, vsplit
+        # name, icon, page, where it lives: "main" = a big tab in the top bar, "tools" = the TOOLS menu,
+        # "corner" = an icon at the top right
+        self.nav_items = [
+            ("Home", "house", self.home_page, "main"),
+            ("Library", "square-stack", self.library_page, "main"),
+            ("Accounts", "user-round", self.accounts_page, "main"),
+            ("Friends", "users", page_frame("Friends", "", self.friends_page), "main"),
+            ("Servers", "server", page_frame("Servers", "", self.servers_page), "tools"),
+            ("Presets", "bookmark", page_frame("Presets", "", self.presets_page), "tools"),
+            ("Macros", "keyboard", page_frame("Macros", "", self.macros_page), "tools"),
+            ("Windows", "layout-grid", page_frame("Windows", "", self.windows_page), "tools"),
+            ("Performance", "gauge", page_frame("Performance", "", self.perf_page), "tools"),
+            ("My Sober", "gamepad-2", page_frame("My Sober", "", self.my_sober_page), "tools"),
+            ("Settings", "settings", page_frame("Settings", "", self.settings_page), "corner"),
+            ("Help", "circle-help", page_frame("Help", "", self.help_page), "corner"),
+            ("Activity", "activity", self.activity_page, "corner"),
+            ("Profile", "user-round", self.profile_page, "hidden"),         # opened from an account / the chip
+        ]
+        self.tabs = QStackedWidget()            # named tabs: the rest of the code switches pages through it
+        for _, _, page, _ in self.nav_items:
+            self.tabs.addWidget(page)
+        self.tabs.currentChanged.connect(self._tab_changed)
+        self._history, self._hpos, self._hjump = [0], 0, False
+
+        body = QWidget()
+        bv = QVBoxLayout(body)
+        bv.setContentsMargins(24, 16, 24, 8)
+        bv.addWidget(self.tabs, 1)
         central = QWidget()
         cv = QVBoxLayout(central)
         cv.setContentsMargins(0, 0, 0, 0)
         cv.setSpacing(0)
-        cv.addWidget(self._build_header())
-        cv.addWidget(vsplit, 1)
+        cv.addWidget(self._build_topbar())
+        cv.addWidget(body, 1)
+        cv.addWidget(self._build_bottombar())
         self.setCentralWidget(central)
+        self.me.set_account(self.home_page.home_account())
         self.sampler = usage.Sampler()
 
         self.addAction(QAction(self, shortcut=QKeySequence.Find, triggered=lambda: self.search.setFocus()))
         self.addAction(QAction(self, shortcut=QKeySequence.Delete, triggered=self.remove_selected))
+        # Enter launches only from the account list (it confirms dialogs / fields everywhere else)
+        for view in (self.table, self.cards):
+            for key in ("Return", "Enter"):
+                a = QAction(view, shortcut=QKeySequence(key), triggered=self.launch_selected)
+                a.setShortcutContext(Qt.WidgetShortcut)
+                view.addAction(a)
+        for key, fn in (("F2", self.edit_selected), ("Ctrl+Shift+S", self.stop_all), ("Ctrl+N", self.add_browser),
+                        ("Ctrl+A", lambda: self.table.selectAll()), ("Ctrl+Shift+W", self.open_screen_wall),
+                        ("F5", self.presence_tick), ("Ctrl+K", self.open_palette), ("Ctrl+P", self.open_palette),
+                        ("Alt+Left", self.go_back), ("Alt+Right", self.go_forward)):
+            self.addAction(QAction(self, shortcut=QKeySequence(key), triggered=fn))
+        for n in range(1, 11):          # Ctrl+1 ... Ctrl+0 = the first ten pages (sidebar order)
+            self.addAction(QAction(self, shortcut=QKeySequence(f"Ctrl+{n % 10}"),
+                                   triggered=lambda _=False, i=n - 1: self.tabs.setCurrentIndex(i)))
 
         self.search.textChanged.connect(self.proxy.set_text)
         self.group_filter.currentIndexChanged.connect(lambda *_: self.proxy.set_group(self.group_filter.currentData()))
@@ -216,6 +257,7 @@ class MainWindow(QMainWindow):
             tm.addAction("Show / hide", self.toggle_visible)
             tm.addAction("Launch selected", self.launch_selected)
             tm.addAction("Arrange windows", lambda: self.windows_page.arrange())
+            tm.addAction("Screen wall", self.open_screen_wall)
             tm.addAction("Stop all", self.stop_all)
             tm.addSeparator()
             tm.addAction("Quit", self.quit_app)
@@ -229,19 +271,30 @@ class MainWindow(QMainWindow):
         self.t_presence = QTimer(self, timeout=self.presence_tick)
         self.t_watcher = QTimer(self, timeout=self.watcher_tick)
         self.t_afk = QTimer(self, timeout=self.anti_afk_now)
+        self.t_friends = QTimer(self, timeout=self.friends_tick)
+        self.t_friends.start(60000)
+        self.t_logs = QTimer(self, timeout=self.log_tick)     # Roblox logs: joins and kicks within seconds
+        self.t_logs.start(4000)
+        self._logs_busy = False
+        self.launcher.notify = lambda kind, inst, text: ui(lambda: self.desktop_notify(kind, text))
+        self.launcher.on_join = lambda inst, place, job: ui(lambda: self.joined(inst, place, job))
+        self.t_updates = QTimer(self, timeout=lambda: (self.check_updates(), self.refresh_versions()))  # runs for days
+        self.t_updates.start(6 * 3600 * 1000)
         self.restart_timers()
 
         self.refresh_groups()
+        self.restore_ui_state()
         self.refresh_accounts()
         self.update_header()
         QTimer.singleShot(300, self.startup)
 
-    # ================================================================ basics
     def log(self, msg: str) -> None:
         """Thread-safe."""
         log.write(msg)
 
     def _append_log(self, line: str, replace: bool) -> None:
+        fm = self.status_line.fontMetrics()
+        self.status_line.setText(fm.elidedText(line, Qt.ElideRight, max(200, self.status_line.width() - 24)))
         doc = self.logview.document()
         if replace and self.logview.toPlainText():
             c = QTextCursor(doc.lastBlock())
@@ -256,15 +309,41 @@ class MainWindow(QMainWindow):
         self.tabs.setCurrentWidget(page)
 
     def _tab_changed(self, i):
+        if self._hjump:
+            self._hjump = False
+        elif self._history[self._hpos] != i:
+            del self._history[self._hpos + 1:]
+            self._history.append(i)
+            self._history = self._history[-50:]
+            self._hpos = len(self._history) - 1
+        self._nav_icons()
         if self.tabs.widget(i) is self.windows_page:
             self.windows_page.refresh()
         elif self.tabs.widget(i) is self.settings_page:
             self.settings_page.update_status()
+        elif self.tabs.widget(i) is self.my_sober_page and not self.my_sober_page.dirty:
+            self.my_sober_page.load()           # Sober's own settings menu may have changed the file
 
     def reload_pages(self):
         for p in (self.launch_page, self.windows_page, self.perf_page, self.settings_page):
             p.load()
         self.restart_timers()
+
+    def apply_theme(self, key: str):
+        """Switches the theme right away (Settings > Appearance)."""
+        store.settings.theme = key
+        store.save_settings()
+        theme.apply(key)
+        self.update_header()
+        self.model.refresh_status()
+        self.table.viewport().update()
+        self.on_selection()
+        self.settings_page.update_status()
+        self.windows_page.preview.update()
+        self._nav_icons()
+        refresh_icons()
+        self.playing_as.update()
+        self.log(f"Theme: {theme.current().name}.")
 
     def restart_timers(self):
         s = store.settings
@@ -272,584 +351,185 @@ class MainWindow(QMainWindow):
         self.t_watcher.start(max(15, s.watcher_sec) * 1000)
         self.t_afk.start(max(1, s.anti_afk_min) * 60000) if s.anti_afk else self.t_afk.stop()
 
-    # ================================================================ account list
-    def refresh_accounts(self):
-        sel = {a.id for a in self.selected_accounts()}
-        self.model.reload()
-        self.apply_sort()
-        sm = self.table.selectionModel()
-        for r in range(self.proxy.rowCount()):
-            a = self.proxy.index(r, 0).data(ACCOUNT_ROLE)
-            if a and a.id in sel:
-                sm.select(self.proxy.index(r, 0), QItemSelectionModel.Select | QItemSelectionModel.Rows)
-        self.refresh_groups()
-        self.on_selection()
-
-    def refresh_groups(self):
-        keep = self.group_filter.currentData()
-        self.group_filter.blockSignals(True)
-        self.group_filter.clear()
-        self.group_filter.addItem("All groups", None)
-        for g in store.all_groups():
-            self.group_filter.addItem(g, g)
-        if any(not a.group for a in store.accounts) and store.all_groups():
-            self.group_filter.addItem("(no group)", "")
-        i = self.group_filter.findData(keep)
-        self.group_filter.setCurrentIndex(i if i >= 0 else 0)
-        self.group_filter.blockSignals(False)
-
-    def apply_sort(self):
-        k = self.sort.currentData()
-        col = {"Name": 0, "Group": 1, "Status": 2, "Last": 4}.get(k, -1)
-        self.proxy.sort(col, Qt.AscendingOrder)
-
-    def selected_accounts(self) -> List[Account]:
-        rows = sorted({i.row() for i in self.table.selectionModel().selectedRows()})
-        return [a for a in (self.proxy.index(r, 0).data(ACCOUNT_ROLE) for r in rows) if a]
-
-    def filtered_accounts(self) -> List[Account]:
-        return [a for a in (self.proxy.index(r, 0).data(ACCOUNT_ROLE) for r in range(self.proxy.rowCount())) if a]
-
-    def any_cookie(self) -> Optional[str]:
-        sel = self.selected_accounts()
-        a = sel[0] if sel else next((x for x in store.accounts if x.cookie and not store.live(x).cookie_bad), None)
-        return a.cookie if a else None
-
-    def on_selection(self):
-        self.launch_page.update_selection(self.selected_accounts())
-
-    def context_menu(self, pos):
-        sel = self.selected_accounts()
-        if not sel:
-            return
-        m = QMenu(self)
-        m.addAction("Launch", self.launch_selected)
-        m.addAction("Stop", self.stop_selected)
-        bg_insts = [i for a in sel for i in self.launcher.instances_of(a) if i.screen]
-        if len(sel) == 1 and not bg_insts:
-            m.addAction("Focus its window", lambda: self.focus_account(sel[0]))
-        if bg_insts:
-            m.addSeparator()
-            if len(bg_insts) == 1:
-                m.addAction("View screen", lambda: self.view_screen(bg_insts[0]))
-            mm = m.addMenu("Run macro")
-            for mac in store.settings.macros:
-                mm.addAction(mac.name, lambda n=mac.name: [self.launcher.start_macro(i, n, self.log) for i in bg_insts])
-            if not store.settings.macros:
-                mm.addAction("(none yet - see the Macros tab)").setEnabled(False)
-            if any(i.macro for i in bg_insts):
-                m.addAction("Stop macro", lambda: [self.launcher.stop_macro(i) for i in bg_insts])
-        m.addSeparator()
-        m.addAction("Edit...", self.edit_selected)
-        m.addAction("Details", self.details_selected)
-        m.addAction("Copy cookie", lambda: self.copy([a.cookie for a in sel]))
-        m.addAction("Copy username", lambda: self.copy([a.username for a in sel]))
-        m.addSeparator()
-        if self.sort.currentData() == "Manual":
-            m.addAction("Move up", lambda: self.move_selected(-1))
-            m.addAction("Move down", lambda: self.move_selected(1))
-            m.addSeparator()
-        if len(sel) == 1:
-            m.addAction("Open its Sober profile folder", lambda: sober.open_folder(sober.profile_app(sel[0])
-                                                                                 if sober.profile_app(sel[0]).exists() else paths.PROFILES_DIR))
-        m.addAction("Reset Sober profile", self.reset_selected_profiles)
-        m.addSeparator()
-        m.addAction("Remove", self.remove_selected)
-        m.exec(self.table.viewport().mapToGlobal(pos))
-
-    def copy(self, items: List[str]):
-        QGuiApplication.clipboard().setText("\n".join(items))
-        self.log(f"Copied {len(items)} item(s) to the clipboard.")
-
-    def move_selected(self, d: int):
-        sel = self.selected_accounts()
-        if not sel:
-            return
-        accs = store.accounts
-        idx = sorted(accs.index(a) for a in sel)
-        if d < 0 and idx[0] == 0 or d > 0 and idx[-1] == len(accs) - 1:
-            return
-        for i in (idx if d < 0 else reversed(idx)):
-            accs[i], accs[i + d] = accs[i + d], accs[i]
-        store.save_accounts()
-        self.refresh_accounts()
-
-    # ================================================================ adding accounts
-    def _validate(self, cookie: str) -> bool:
-        return api.authenticated(cookie).valid
-
-    def add_cookies(self, cookies: List[str], password_for: dict = None):
-        """Validates cookies on a worker thread and adds / updates the accounts."""
-        if not cookies:
-            self.log("No .ROBLOSECURITY cookies found in that text.")
-            return
-        self.log(f"Checking {len(cookies)} cookie(s)...")
-
-        def work():
-            out = []
-            for c in cookies:
-                u = api.authenticated(c)
-                out.append((c, u))
-                time.sleep(0.25)
-            return out
-
-        def done(results):
-            added = updated = bad = 0
-            for c, u in results:
-                if not u.valid:
-                    bad += 1
-                    self.log(f"Cookie rejected: {u.error}")
-                    continue
-                a = store.find_by_user_id(u.id)
-                if a:
-                    a.cookie = c
-                    updated += 1
-                else:
-                    a = Account(username=u.name, user_id=u.id, display_name=u.display, cookie=c, order=len(store.accounts))
-                    store.accounts.append(a)
-                    added += 1
-                a.username, a.display_name, a.login_lost = u.name, u.display, False
-                if password_for and u.name.lower() in password_for:
-                    a.password = password_for[u.name.lower()]
-                li = store.live(a)
-                li.cookie_bad = li.locked = False
-            store.save_accounts()
-            self.refresh_accounts()
-            self.log(f"Accounts: {added} added, {updated} updated" + (f", {bad} invalid." if bad else "."))
-            self.fetch_avatars()
-        bg(work, done=done)
-
-    def add_browser(self, user: str = "", password: str = ""):
-        if not HAVE_WEBENGINE:
-            warn(self, "Browser login", "Qt WebEngine is not available. Paste the account's cookie instead.")
-            return None
-        d = BrowserLogin(self, self._validate, user, password)
-        if d.exec() and d.cookie:
-            self.add_cookies([d.cookie], {user.lower(): password} if user and password else None)
-            return d.cookie
-        return None
-
-    def add_signup(self):
-        """Roblox's real sign-up page in the built-in browser; you fill it in, the hub adds the login."""
-        if not HAVE_WEBENGINE:
-            warn(self, "Create account", "Qt WebEngine is not available. Sign up on roblox.com and paste the cookie.")
-            return
-        d = BrowserLogin(self, self._validate, signup=True)
-        if d.exec() and d.cookie:
-            self.add_cookies([d.cookie])
-
-    def add_userpass(self):
-        d = PasteDialog(self, "Add accounts with username:password",
-                        "One account per line as <b>username:password</b>. For each one a login window opens with the "
-                        "form filled in; you press Log In (and solve any captcha). The password is saved with the account.",
-                        "user1:password1\nuser2:password2")
-        if not d.exec():
-            return
-        pairs = []
-        for line in d.text().splitlines():
-            if ":" in line.strip():
-                u, p = line.strip().split(":", 1)
-                if u.strip():
-                    pairs.append((u.strip(), p))
-        for i, (u, p) in enumerate(pairs):
-            self.log(f"Login {i + 1}/{len(pairs)}: {u}")
-            if self.add_browser(u, p) is None and i < len(pairs) - 1:
-                if not ask(self, "Browser login", f"The login for {u} was closed. Continue with the next account?"):
-                    break
-
-    def add_paste(self):
-        d = PasteDialog(self, "Paste cookies", "Paste text containing one or more <tt>.ROBLOSECURITY</tt> cookies "
-                        "(<tt>_|WARNING:-DO-NOT-SHARE-THIS...</tt>). Anything else in the text is ignored.")
-        if d.exec():
-            self.add_cookies(util.extract_cookies(d.text()))
-
-    def add_file(self):
-        fn, _ = QFileDialog.getOpenFileName(self, "Import cookies", str(Path.home()), "Text files (*.txt *.json *.csv);;All files (*)")
-        if fn:
-            try:
-                self.add_cookies(util.extract_cookies(Path(fn).read_text(errors="replace")))
-            except OSError as ex:
-                warn(self, "Import", str(ex))
-
-    def add_from_sober(self):
-        c = sober.main_cookie()
-        if not c:
-            warn(self, "Import from Sober", "No login was found in your Sober profile "
-                 f"({sober.main_app() / 'data/sober/cookies'}). Log in inside Sober first "
-                 "(and keep 'use_libsecret' off).")
-            return
-        self.add_cookies([c])
-
-    def add_windows_file(self):
-        fn, _ = QFileDialog.getOpenFileName(self, "Windows accounts.dat", str(Path.home()), "accounts.dat (*.dat);;All files (*)")
-        if not fn:
-            return
-        raw = Path(fn).read_bytes()
-        if raw[:1] == b"D":
-            warn(self, "Import", "This file is encrypted with Windows DPAPI and can only be opened on that Windows PC.\n\n"
-                 "In the Windows app set a password (Settings > Encryption), then copy accounts.dat again.")
-            return
-        pw = None
-        if raw[:1] == b"P":
-            pw = PasswordDialog.ask(self, "Windows accounts.dat", "Password of that accounts file:")
-            if pw is None:
-                return
-        try:
-            accs = store.accounts_from_json(store.decrypt_file(raw, pw))
-        except Exception as ex:
-            warn(self, "Import", str(ex))
-            return
-        added = 0
-        for a in accs:
-            if not a.cookie or store.find_by_user_id(a.user_id) or store.find_by_cookie(a.cookie):
-                continue
-            a.order = len(store.accounts)
-            store.accounts.append(a)
-            added += 1
-        store.save_accounts()
-        self.refresh_accounts()
-        self.log(f"Imported {added} of {len(accs)} account(s) from the Windows app (duplicates skipped).")
-        self.fetch_avatars()
-
-    # ================================================================ editing
-    def edit_selected(self):
-        sel = self.selected_accounts()
-        if not sel:
-            return
-        if len(sel) == 1:
-            d = EditAccountDialog(self, sel[0])
-            if d.exec():
-                changed = d.apply()
-                store.save_accounts()
-                self.refresh_accounts()
-                if changed:
-                    self.add_cookies([sel[0].cookie])
-        else:
-            d = BulkEditDialog(self, sel)
-            if d.exec():
-                d.apply(sel)
-                store.save_accounts()
-                self.refresh_accounts()
-
-    def remove_selected(self):
-        sel = self.selected_accounts()
-        if not sel:
-            return
-        names = ", ".join(a.name for a in sel[:6]) + ("..." if len(sel) > 6 else "")
-        if not ask(self, "Remove accounts", f"Remove {len(sel)} account(s)?\n\n{names}\n\n"
-                   "Their isolated Sober profiles are deleted too."):
-            return
-        for a in sel:
-            store.accounts.remove(a)
-        store.save_accounts()
-        self.refresh_accounts()
-        self.log(f"Removed {len(sel)} account(s).")
-
-        def cleanup():
-            for a in sel:
-                self.launcher.stop_account(a)
-                sober.reset_profile(a)
-        bg(cleanup, done=lambda _: self.update_running())
-
-    def details_selected(self):
-        sel = self.selected_accounts()
-        if not sel:
-            return
-        d = TextDialog(self, "Account details", "Loading...")
-
-        def work():
-            return ("\n\n" + "-" * 40 + "\n\n").join(api.details(a) for a in sel)
-        bg(work, done=d.set_text)
-        d.exec()
-
-    def reset_selected_profiles(self):
-        sel = self.selected_accounts()
-        if not sel:
-            self.log("Select the accounts whose Sober profile should be reset.")
-            return
-        if not ask(self, "Reset Sober profile", f"Delete the isolated Sober profile of {len(sel)} account(s)? "
-                   "It is created again (from your normal Sober) on the next launch."):
-            return
-
-        def work():
-            for a in sel:
-                self.launcher.stop_account(a)
-                sober.reset_profile(a)
-        bg(work, done=lambda _: (self.update_running(), self.log(f"Reset the Sober profile of {len(sel)} account(s).")))
-
-    def add_recent(self, place_id: int, name: str = ""):
-        s = store.settings
-        e = next((x for x in s.recent if x.place_id == place_id), None)
-        if e is None:
-            e = GameEntry(place_id=place_id)
-            s.recent.insert(0, e)
-        e.ts = time.time()
-        if name:
-            e.name = name
-        s.recent = sorted(s.recent, key=lambda x: -x.ts)[:25]
-        store.save_settings()
-        self.launch_page.refresh_recent()
-        if not e.name:
-            def done(n):
-                if n:
-                    e.name = n
-                    store.save_settings()
-                    self.launch_page.refresh_recent()
-                    self.model.refresh_status()
-            bg(api.place_name, place_id, done=done)
-
-    # ================================================================ launching
-    def set_launching(self, on: bool, cancel: Optional[threading.Event] = None):
-        self.launching = on
-        self.cancel = cancel if on else None
-        self.launch_page.set_launching(on)
-
-    def launch_selected(self):
-        sel = self.selected_accounts()
-        if not sel:
-            self.log("Select one or more accounts in the list first.")
-            self.show_page(self.launch_page)
-            return
-        self.start_launch(sel)
-
-    def launch_all_listed(self):
-        accs = self.filtered_accounts()
-        if not accs:
-            self.log("There are no accounts in the list.")
-            return
-        if len(accs) > 3 and not ask(self, "Launch all", f"Launch all {len(accs)} listed accounts?"):
-            return
-        self.start_launch(accs)
-
-    def stop_launch(self):
-        if self.cancel:
-            self.cancel.set()
-            self.log("Stopping after the current account...")
-
-    def join_server(self, place_id: int, job: str):
-        sel = self.selected_accounts()
-        if not sel:
-            self.log("Select one or more accounts in the list first.")
-            return
-        self.start_launch(sel, LaunchSpec(kind="Job", place_id=place_id, job_id=job), allow_saved=False)
-
-    def start_launch(self, accs: List[Account], fixed: Optional[LaunchSpec] = None, allow_saved: bool = True):
-        if self.launching:
-            self.log("A launch is already running. Press Stop to cancel it.")
-            return
-        form = self.launch_page.read_form()
-        cancel = threading.Event()
-        self.set_launching(True, cancel)
-        s = store.settings
-
-        def work():
-            if fixed is not None:
-                spec = fixed
-            elif s.use_saved_per_account and all(specs.saved_spec(a) for a in accs):
-                spec = specs.saved_spec(accs[0])
-            else:
-                spec = specs.resolve_form(form, accs[0], self.log)
-            if spec is None:
-                return
-            self.run_sequence(accs, spec, allow_saved, cancel)
-
-        bg(work, done=lambda _: self.set_launching(False), err=lambda _: self.set_launching(False))
-
-    def run_sequence(self, accs: List[Account], spec: LaunchSpec, allow_saved: bool, cancel: threading.Event):
-        """Worker thread."""
-        s = store.settings
-        self.log(f"Launching {len(accs)} account(s): {spec.describe()}")
-        if spec.place_id:
-            pid = spec.place_id
-            ui(lambda: self.add_recent(pid))
-        for i, a in enumerate(accs):
-            if cancel.is_set():
-                break
-            self.launcher.breaker_clear(a)
-            per = ((specs.saved_spec(a) or spec) if allow_saved and s.use_saved_per_account else spec).copy()
-            if per.kind == "Private" and per.share_code and not per.link_code:
-                if not specs.resolve_saved_share(a, per, self.log):
-                    continue
-            self.launcher.launch(a, per, self.log)
-            ui(self.update_running)
-            if i < len(accs) - 1 and not cancel.is_set():
-                cancel.wait(max(0, s.launch_delay_sec))
-        self.log("Launch cancelled." if cancel.is_set() else "Launch sequence finished.")
-        if not cancel.is_set() and s.webhook_batch:
-            webhook.send("Launch finished", f"Started {len(accs)} account(s): {spec.describe()}", webhook.GREEN)
-
-    def stop_selected(self):
-        sel = self.selected_accounts()
-        if sel:
-            bg(lambda: [self.launcher.stop_account(a, self.log) for a in sel], done=lambda _: self.update_running())
-
-    def stop_instances(self, insts: List[Instance]):
-        bg(lambda: [self.launcher.stop_instance(i, self.log) for i in insts], done=lambda _: self.update_running())
-
-    def stop_all(self):
-        self.stop_launch()
-        bg(self.launcher.stop_all, self.log, done=lambda _: self.update_running())
-
-    def focus_account(self, a: Account):
-        if not self.kwin or not a.tracker_id:
-            return
-        for w in self.kwin.windows():
-            if sober.tracker_of_pid(w.pid) == a.tracker_id:
-                self.kwin.activate(w.id)
-                return
-        self.log(f"[{a.name}] has no open window.")
-
-    # ================================================================ timers
-    def update_running(self) -> List[Instance]:
-        alive = self.launcher.alive_instances()
-        self.model.running = {i.account.id for i in alive}
-        self.model.refresh_status()
-        self.update_header(alive)
-        return alive
 
     # ---------------------------------------------------------------- header
-    def _build_header(self) -> QWidget:
-        h = QWidget()
-        hl = QHBoxLayout(h)
-        hl.setContentsMargins(10, 8, 12, 6)
-        hl.setSpacing(12)
-        icon = QLabel()
-        icon.setPixmap(app_icon().pixmap(40, 40))
-        hl.addWidget(icon)
-        brand = QVBoxLayout()
-        brand.setSpacing(0)
+    def _build_topbar(self) -> QWidget:
+        """Back / forward, the big section tabs (TOOLS = a menu of the power-user pages), and at the right the
+        update button, Activity / Settings / Help and the Home account."""
+        bar = QWidget()
+        bar.setObjectName("topbar")
+        bar.setAttribute(Qt.WA_StyledBackground, True)
+        h = QHBoxLayout(bar)
+        h.setContentsMargins(12, 8, 14, 0)
+        h.setSpacing(4)
+        self.back_btn = QPushButton()
+        self.fwd_btn = QPushButton()
+        for b, ic, fn, tip in ((self.back_btn, "chevron-left", self.go_back, "Back (Alt+Left)"),
+                               (self.fwd_btn, "chevron-right", self.go_forward, "Forward (Alt+Right)")):
+            b.setObjectName("navarrow")
+            b.setToolTip(tip)
+            b.setIconSize(QSize(20, 20))
+            b.clicked.connect(fn)
+            h.addWidget(b, 0, Qt.AlignVCenter)
+        h.addSpacing(8)
+        logo = QLabel()
+        logo.setPixmap(app_icon().pixmap(30, 30))
+        h.addWidget(logo, 0, Qt.AlignVCenter)
         name = QLabel(APP_NAME)
-        name.setStyleSheet("font-size: 15pt; font-weight: 700;")
-        by = QLabel(f"by {AUTHOR}")
-        by.setStyleSheet("color: palette(placeholder-text);")
-        brand.addWidget(name)
-        brand.addWidget(by)
-        hl.addLayout(brand)
-        hl.addSpacing(24)
-        self.stat_run = StatBlock("Running", "Accounts running now / all your accounts.")
-        self.stat_cpu = StatBlock("CPU", "CPU used by everything Cellar runs for your accounts: their Sober clients,\n"
-                                         "network helpers and invisible screens. 100% = every core of this PC busy.")
-        self.stat_mem = StatBlock("Memory", "Memory used by the same, from the kernel's own accounting\n"
-                                            "(file cache the kernel can drop at once is not counted).")
-        for b in (self.stat_run, self.stat_cpu, self.stat_mem):
-            hl.addWidget(b)
-            hl.addSpacing(16)
-        hl.addStretch(1)
+        name.setObjectName("brand")
+        h.addWidget(name, 0, Qt.AlignVCenter)
+        h.addSpacing(22)
+
+        self.nav = QButtonGroup(self)
+        self.nav.setExclusive(False)
+        self.nav_buttons = []                   # (button, icon name, page index) - corner ones have icons
+        tools = QMenu(self)
+        self.tools_btn = QPushButton("TOOLS")
+        for i, (text, icon_name, page, where) in enumerate(self.nav_items):
+            if where == "main":
+                b = QPushButton(text.upper())
+                b.setObjectName("topnav")
+                b.setCheckable(True)
+                b.clicked.connect(lambda _=False, page=page: self.show_page(page))
+                self.nav_buttons.append((b, "", i))
+                h.addWidget(b)
+            elif where == "tools":
+                a = tools.addAction(text, lambda page=page: self.show_page(page))
+                a.setData(icon_name)
+        tools.addSeparator()
+        tools.addAction("Screen wall", self.open_screen_wall)
+        self.tools_menu = tools
+        self.tools_btn.setObjectName("topnav")
+        self.tools_btn.setCheckable(True)
+        self.tools_btn.clicked.connect(lambda: (self.tools_btn.setChecked(self._on_tool_page()),
+                                                tools.exec(self.tools_btn.mapToGlobal(
+                                                    self.tools_btn.rect().bottomLeft()))))
+        h.addWidget(self.tools_btn)
+        h.addStretch(1)
+
+        self.versions = ""          # "Sober 1.x · Roblox 2.x", filled in by startup()
+        self.update_btn = btn("", self.show_update, primary=True)
+        self.update_btn.setVisible(False)
+        self.new_release = None
+        h.addWidget(self.update_btn, 0, Qt.AlignVCenter)
+        for i, (text, icon_name, page, where) in enumerate(self.nav_items):
+            if where == "corner":
+                b = QPushButton()
+                b.setObjectName("corner")
+                b.setCheckable(True)
+                b.setToolTip(text)
+                b.setIconSize(QSize(20, 20))
+                b.clicked.connect(lambda _=False, page=page: self.show_page(page))
+                self.nav_buttons.append((b, icon_name, i))
+                h.addWidget(b, 0, Qt.AlignVCenter)
+        h.addSpacing(8)
+        self.me = AccountChip()
+        self.me.clicked.connect(self._me_menu)
+        h.addWidget(self.me, 0, Qt.AlignVCenter)
+        self._nav_icons()
+        return bar
+
+    def _build_bottombar(self) -> QWidget:
+        """+ Add account, the newest message, the live numbers, who plays and friends online."""
+        bar = QWidget()
+        bar.setObjectName("bottombar")
+        bar.setAttribute(Qt.WA_StyledBackground, True)
+        h = QHBoxLayout(bar)
+        h.setContentsMargins(12, 3, 12, 3)
+        h.setSpacing(14)
+        add = QPushButton("  Add account")
+        add.setObjectName("barbtn")
+        add.setIcon(theme.icon("plus", "muted"))
+        add.clicked.connect(lambda: self.add_menu.exec(add.mapToGlobal(add.rect().topLeft())
+                                                        - QPoint(0, self.add_menu.sizeHint().height())))
+        self._bar_add = add
+        h.addWidget(add)
+        self.status_line = QPushButton("")
+        self.status_line.setObjectName("statusline")
+        self.status_line.setCursor(Qt.PointingHandCursor)
+        self.status_line.setToolTip("The newest message - click for all of them (Activity)")
+        self.status_line.clicked.connect(lambda: self.show_page(self.activity_page))
+        h.addWidget(self.status_line, 1)
+        self.stat_run = MiniStat("Running", "Accounts running now / all your accounts.")
+        self.stat_cpu = MiniStat("CPU", "CPU used by everything Cellar runs for your accounts: their Sober clients,\n"
+                                        "network helpers and invisible screens. 100% = every core of this PC busy.")
+        self.stat_mem = MiniStat("Memory", "Memory used by the same, from the kernel's own accounting\n"
+                                           "(file cache the kernel can drop at once is not counted).")
+        for st in (self.stat_run, self.stat_cpu, self.stat_mem):
+            h.addWidget(st)
         self.st_multi = QLabel()
-        self.st_multi.setTextFormat(Qt.RichText)
-        self.st_multi.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
-        hl.addWidget(self.st_multi)
-        return h
+        self.st_multi.setObjectName("pill")
+        self.st_multi.setToolTip("Multi-instance gives every account its own isolated Sober, so many can run at "
+                                 "once (Settings).")
+        h.addWidget(self.st_multi)
+        self.st_multi_sub = QLabel()            # its text goes into the pill's tooltip (no room in the bar)
+        self.st_multi_sub.setVisible(False)
+        self.playing_as = PlayingAs(compact=True)
+        self.playing_as.clicked.connect(lambda: self.show_page(self.accounts_page))
+        h.addWidget(self.playing_as)
+        self.friends_btn = QPushButton("Friends")
+        self.friends_btn.setObjectName("barbtn")
+        self.friends_btn.setIcon(theme.icon("users", "muted"))
+        self.friends_btn.clicked.connect(lambda: self.show_page(self.nav_items[3][2]))
+        h.addWidget(self.friends_btn)
+        return bar
 
-    def update_header(self, alive: Optional[List[Instance]] = None):
-        s = store.settings
-        ok, why = sober.multi_instance_support()
-        if not sober.sober_installed():
-            t = "<span style='color:#f85149'>Sober is not installed</span>"
-        elif s.multi_instance and ok:
-            t = "<span style='color:#3fb950'>Multi-instance: ON</span>"
-        elif s.multi_instance:
-            t = f"<span style='color:#d29922'>Multi-instance: unavailable</span><br><small>{why}</small>"
-        else:
-            t = "Multi-instance: off<br><small>one Sober at a time</small>"
-        if self.kwin is None or not self.kwin.available():
-            t += "<br><small>window layout off (needs KDE Plasma)</small>"
-        self.st_multi.setText(t)
-        if alive is None:
-            alive = self.launcher.alive_instances()
-        n = len(alive)
-        in_bg = sum(1 for i in alive if i.screen)
-        self.stat_run.set(f"{n} / {len(store.accounts)}",
-                          "nothing running" if not n else f"{in_bg} in the background" if in_bg else "in windows")
-        if self.tray:
-            self.tray.setToolTip(f"{APP_NAME} - {n} running")
+    def _on_tool_page(self) -> bool:
+        i = self.tabs.currentIndex()
+        return self.nav_items[i][3] == "tools"
 
-    def update_usage(self, alive: List[Instance]):
-        if not usage.available():
-            self.stat_cpu.set("-", "needs cgroup v2")
-            self.stat_mem.set("-", "needs cgroup v2")
-            return
-        cores, mem = self.sampler.sample(usage.groups_for(alive))
-        ncpu = os.cpu_count() or 1
-        if cores is None:
-            self.stat_cpu.set("...", "measuring")
-        else:
-            self.stat_cpu.set(f"{cores / ncpu * 100:.0f}%", f"{cores:.1f} of {ncpu} cores")
-        self.stat_mem.set(_size(mem), f"about {_size(mem / len(alive))} each" if alive else "")
+    def _nav_icons(self):
+        i = self.tabs.currentIndex()
+        for b, name, idx in self.nav_buttons:
+            b.setChecked(idx == i)
+            if name:
+                b.setIcon(theme.icon(name, "accent" if idx == i else "muted"))
+        self.tools_btn.setChecked(self._on_tool_page())
+        for a in self.tools_menu.actions():
+            if a.data():
+                a.setIcon(theme.icon(a.data(), "text"))
+        self.back_btn.setIcon(theme.icon("chevron-left", "text" if self._hpos > 0 else "muted"))
+        self.fwd_btn.setIcon(theme.icon("chevron-right", "text" if self._hpos < len(self._history) - 1 else "muted"))
+        self.back_btn.setEnabled(self._hpos > 0)
+        self.fwd_btn.setEnabled(self._hpos < len(self._history) - 1)
+        if hasattr(self, "_bar_add"):
+            self._bar_add.setIcon(theme.icon("plus", "muted"))
+            self.friends_btn.setIcon(theme.icon("users", "muted"))
 
-    def tick(self):
-        alive = self.update_running()
-        if self.isVisible():
-            self.update_usage(alive)
-        try:
-            self.windows_page.auto_tick()
-            if self.isVisible() and self.tabs.currentWidget() is self.windows_page:
-                self.windows_page.refresh()
-        except Exception as ex:
-            log.error("tick", ex)
+    def go_back(self):
+        if self._hpos > 0:
+            self._hpos -= 1
+            self._hjump = True
+            self.tabs.setCurrentIndex(self._history[self._hpos])
 
-    def presence_tick(self):
-        if self._presence_busy or not store.settings.show_presence:
-            return
-        ids = [a.user_id for a in store.accounts if a.user_id]
-        cookie = self.any_cookie()
-        if not ids or not cookie:
-            return
-        self._presence_busy = True
+    def go_forward(self):
+        if self._hpos < len(self._history) - 1:
+            self._hpos += 1
+            self._hjump = True
+            self.tabs.setCurrentIndex(self._history[self._hpos])
 
-        def done(res):
-            self._presence_busy = False
-            for a in store.accounts:
-                p = res.get(a.user_id)
-                if p:
-                    li = store.live(a)
-                    li.presence_type, li.where = p.type, p.location
-            self.model.refresh_status()
-        bg(api.presence, cookie, ids, done=done, err=lambda _: setattr(self, "_presence_busy", False))
+    def _me_menu(self):
+        m = QMenu(self)
+        a = self.home_page.home_account()
+        if a:
+            m.addAction(f"View {a.name}'s profile", lambda: self.show_profile(a))
+            m.addSeparator()
+        sub = m.addMenu("Home account (friends, favourites)")
+        for acc in [x for x in store.accounts if x.user_id and x.cookie]:
+            act = sub.addAction(acc.name, lambda acc=acc: self.set_home_account(acc))
+            act.setCheckable(True)
+            act.setChecked(a is not None and acc.id == a.id)
+        m.addAction("Add account...", self.add_browser)
+        m.addSeparator()
+        m.addAction("Settings", lambda: self.show_page(self.settings_page.parentWidget()))
+        m.exec(self.me.mapToGlobal(self.me.rect().bottomLeft()))
 
-    def watcher_tick(self):
-        if self._watcher_busy or self.launching:
-            return
-        if not self.launcher.snapshot():
-            return
-        self._watcher_busy = True
+    def set_home_account(self, a: Account):
+        i = self.home_page.acc.findData(a.id)
+        if i >= 0:
+            self.home_page.acc.setCurrentIndex(i)
+        self.me.set_account(a)
 
-        def fin(_=None):
-            self._watcher_busy = False
-            self.update_running()
-        bg(self.launcher.watcher_tick, self.log, self.any_cookie, done=fin, err=fin)
-
-    def view_screen(self, inst: Instance):
-        v = self.viewers.get(inst.account.id)
-        if v and v.isVisible() and v.inst is inst:
-            v.raise_()
-            v.activateWindow()
-            return
-        v = ScreenViewer(self, inst, self.log, lambda: self.macros_page.load())
-        self.viewers[inst.account.id] = v
-        v.show()
-
-    def anti_afk_now(self):
-        # background accounts: straight over their own screen - no focus change, works without KWin
-        bg_insts = [i for i in self.launcher.alive_instances() if i.screen]
-        if bg_insts:
-            act = store.settings.anti_afk_action
-            bg(lambda: sum(background.poke(i.screen, act) for i in bg_insts if not i.macro),
-               done=lambda n: n and self.log(f"Anti-AFK: poked {n} background account(s)."))
-        if not self.kwin or not self.kwin.available():
-            if bg_insts:
-                return
-            self.log("Anti-AFK needs KWin (KDE Plasma) to focus the windows.")
-            return
-        ours = {i.tracker for i in self.launcher.alive_instances()}
-        ids = [w.id for w in self.kwin.windows() if sober.tracker_of_pid(w.pid) in ours]
-        if not ids:
-            return
-        n = antiafk.pulse(self.kwin, ids, self.log)
-        if n:
-            self.log(f"Anti-AFK: poked {n} window(s).")
-
-    # ================================================================ startup
     def startup(self):
         s = store.settings
         self.log(f"{APP_NAME} {__version__} by {AUTHOR} - data in {paths.DATA_DIR}")
@@ -871,82 +551,39 @@ class MainWindow(QMainWindow):
         elif s.multi_instance and not sober.multi_instance_support()[0]:
             self.log("Multi-instance needs 'pasta' (package passt). Until it is installed only one window can run at a time.")
         if self.kwin is None or not self.kwin.available():
-            self.log("KWin not found: the Windows page (layouts) and anti-AFK need KDE Plasma.")
+            self.log("No window control found: the Windows page (layouts) and anti-AFK for normal windows need KDE "
+                     "Plasma, Hyprland or Sway.")
         self.launcher.adopt_running(self.log)
         if not store.accounts:
             self.log("No accounts yet - use 'Add account' (browser login, cookies, or import from your Sober).")
+        if not s.first_run_done:
+            if store.accounts:          # an install from before the setup existed: nothing to set up
+                s.first_run_done = True
+                store.save_settings()
+            else:
+                QTimer.singleShot(300, self.run_setup)
         if s.check_logins_at_startup and store.accounts:
             self.check_logins()
         self.fetch_avatars()
         self.presence_tick()
+        self.whats_new()
+        self.check_updates()
+        self.refresh_versions()
         if s.startup_preset:
             p = self.presets_page.find(s.startup_preset)
             if p:
                 self.log(f"Running startup preset '{p.name}' in 4 seconds...")
                 QTimer.singleShot(4000, lambda: self.presets_page.run(p))
 
-    def check_logins(self):
-        accs = [a for a in store.accounts if a.cookie]
+    # ------------------------------------------------------------ updates
 
-        def work():
-            out = []
-            for a in accs:
-                out.append((a, api.authenticated(a.cookie)))
-                time.sleep(0.3)
-            return out
+    def run_setup(self):
+        from .setup_wizard import SetupWizard
+        if not self.isVisible():
+            self.show()
+        SetupWizard(self).exec()
+        self.settings_page.update_status()
 
-        def done(results):
-            lost = []
-            for a, u in results:
-                li = store.live(a)
-                if u.valid:
-                    li.cookie_bad = False
-                    a.login_lost = False
-                    if u.name and u.name != a.username:
-                        a.username = u.name
-                    a.display_name = u.display or a.display_name
-                    if not a.user_id:
-                        a.user_id = u.id
-                elif u.locked:
-                    li.locked = True
-                elif "expired" in u.error.lower():
-                    li.cookie_bad = True
-                    if not a.login_lost:
-                        lost.append(a.name)
-                        a.login_lost = True
-            store.save_accounts()
-            self.model.refresh_status()
-            if lost:
-                self.log("Signed out by Roblox (log in again): " + ", ".join(lost))
-                if self.isVisible():
-                    warn(self, "Logins", "These accounts were signed out by Roblox and need a new login:\n\n" + "\n".join(lost))
-            else:
-                self.log(f"Startup check: {sum(1 for _, u in results if u.valid)} of {len(results)} login(s) valid.")
-        bg(work, done=done)
-
-    def fetch_avatars(self):
-        ids = [a.user_id for a in store.accounts if a.user_id and not (paths.AVATAR_DIR / f"{a.user_id}.png").exists()]
-        if not ids:
-            return
-
-        def work():
-            urls = api.avatar_urls(ids)
-            n = 0
-            for uid, url in urls.items():
-                data = api.download(url)
-                if data:
-                    (paths.AVATAR_DIR / f"{uid}.png").write_bytes(data)
-                    n += 1
-            return n
-
-        def done(n):
-            if n:
-                self.model.forget_icons()
-                self.model.reload()
-                self.apply_sort()
-        bg(work, done=done)
-
-    # ================================================================ window / tray
     def toggle_visible(self):
         if self.isVisible() and not self.isMinimized():
             self.hide()
@@ -958,8 +595,61 @@ class MainWindow(QMainWindow):
     def save_geometry(self):
         s = store.settings
         s.win_w, s.win_h = self.width(), self.height()
-        s.split = self.hsplit.sizes() + self.vsplit.sizes()
+        s.split = self.hsplit.sizes()
+        s.ui_tab = self.tabs.currentIndex()
+        s.ui_sort = self.sort.currentData() or "Manual"
+        s.ui_header = bytes(self.table.horizontalHeader().saveState().toBase64()).decode()
         store.save_settings()
+
+    def restore_ui_state(self):
+        s = store.settings
+        self.set_list_view(1 if s.accounts_view == "table" else 0)
+        i = self.sort.findData(s.ui_sort)
+        if i >= 0:
+            self.sort.setCurrentIndex(i)
+        if 0 <= s.ui_tab < self.tabs.count():
+            self.tabs.setCurrentIndex(s.ui_tab)
+        if s.ui_header:
+            from PySide6.QtCore import QByteArray
+            self.table.horizontalHeader().restoreState(QByteArray.fromBase64(s.ui_header.encode()))
+
+    def set_list_view(self, i: int):
+        """0 = cards, 1 = table (remembered)."""
+        self.list_stack.setCurrentIndex(i)
+        self.view_btns.button(i).setChecked(True)
+        store.settings.accounts_view = "table" if i else "cards"
+        store.save_settings()
+
+    def restart_app(self):
+        """Starts a fresh Cellar a moment after this one quits (running accounts keep running and are picked up
+        again). The new process inherits this one's environment, so it runs the same way (Nix wrapper, dev shell...)."""
+        import shlex
+        import subprocess
+        import sys
+        a0 = sys.argv[0]
+        argv = ([sys.executable, "-m", "cellar"] if a0.endswith("__main__.py") or not os.path.isfile(a0)
+                else [sys.executable, a0])
+        argv += [x for x in sys.argv[1:] if x == "--minimized"]
+        subprocess.Popen(["sh", "-c", "sleep 1.5; exec " + shlex.join(argv)], cwd=os.getcwd(),
+                         start_new_session=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        self.hide()                     # hidden: quitting does not ask about the running accounts (they stay)
+        self.quit_app()
+
+    def open_palette(self):
+        from .palette import Palette
+        Palette(self).exec()
+
+    def mousePressEvent(self, e):           # the mouse's own back / forward buttons
+        if e.button() == Qt.BackButton:
+            self.go_back()
+        elif e.button() == Qt.ForwardButton:
+            self.go_forward()
+        else:
+            super().mousePressEvent(e)
+
+    def resizeEvent(self, e):
+        super().resizeEvent(e)
+        self._layout_toasts()
 
     def closeEvent(self, e):
         self.save_geometry()
@@ -975,6 +665,10 @@ class MainWindow(QMainWindow):
     def quit_app(self):
         self._quitting = True
         self.save_geometry()
+        for i in self.launcher.snapshot():      # nobody wakes them up once Cellar is gone
+            if i.frozen and i.pid:
+                i.frozen = False
+                sober.freeze(i.pid, False)
         n = len(self.launcher.alive_instances())
         if n and self.isVisible() and ask(self, "Quit", f"{n} Sober window(s) started by this app are running.\n\n"
                                           "Close them too? (No = keep them running; they are picked up again next start.)"):

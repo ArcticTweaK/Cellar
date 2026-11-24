@@ -2,6 +2,7 @@
 
 import threading
 import time
+from pathlib import Path
 from typing import Callable, List, Optional
 
 from PySide6.QtCore import QObject, QPoint, QRect, Qt, Signal
@@ -139,6 +140,10 @@ class ScreenViewer(QDialog):
         self.status = QLabel("")
         bar.addWidget(self.control)
         bar.addWidget(self.rec)
+        shot = QPushButton("Screenshot")
+        shot.setToolTip("Saves what this screen shows now to your Pictures folder (Cellar)")
+        shot.clicked.connect(self.screenshot)
+        bar.addWidget(shot)
         bar.addWidget(self.status, 1)
         self.pos = QLabel("mouse: -")
         self.pos.setToolTip("Where the mouse is on this account's 1280x720 screen.\n"
@@ -179,6 +184,21 @@ class ScreenViewer(QDialog):
     def _show(self, img: QImage):
         self.canvas.img = img
         self.canvas.update()
+
+    def screenshot(self):
+        from PySide6.QtCore import QStandardPaths
+        img = self.canvas.img
+        if img is None:
+            self.status.setText("No picture yet.")
+            return
+        base = Path(QStandardPaths.writableLocation(QStandardPaths.PicturesLocation) or Path.home()) / "Cellar"
+        base.mkdir(parents=True, exist_ok=True)
+        f = base / f"{self.inst.account.name}-{time.strftime('%Y-%m-%d_%H-%M-%S')}.png"
+        if img.save(str(f)):
+            self.status.setText(f"Saved {f.name}")
+            self.logf(f"[{self.inst.account.name}] screenshot saved: {f}")
+        else:
+            self.status.setText("Could not save the screenshot.")
 
     # ---- input
     def _control_changed(self, on: bool):
@@ -243,7 +263,7 @@ class ScreenViewer(QDialog):
         store.settings.macros.append(Macro(name=name, text=text + "wait 1000\n", loop=True))
         store.save_settings()
         self.macros_changed()
-        self.status.setText(f"Saved macro '{name}' - edit or run it on the Macros tab.")
+        self.status.setText(f"Saved macro '{name}' - edit or run it on the Macros page.")
         self.logf(f"Saved macro '{name}' ({len(events)} recorded actions).")
 
     def done(self, r):
@@ -258,4 +278,159 @@ class ScreenViewer(QDialog):
                 except Exception:
                     pass
             self.vnc.close()
+        super().done(r)
+
+
+class _Tile(QWidget):
+    """One background account on the screen wall: a small live picture, about one frame a second."""
+
+    clicked = Signal()
+    FPS = 1.0
+
+    def __init__(self, inst: Instance):
+        super().__init__()
+        self.inst = inst
+        self.img: Optional[QImage] = None
+        self.error = ""
+        self._stop = threading.Event()
+        self.sig = _Frames()
+        self.sig.frame.connect(self._show)
+        self.sig.failed.connect(self._failed)
+        self.setMinimumSize(256, 168)
+        self.setCursor(Qt.PointingHandCursor)
+        self.setToolTip("Click to open its screen")
+        threading.Thread(target=self._reader, daemon=True, name="screen wall").start()
+
+    def _reader(self):
+        v = None
+        try:
+            v = background.VNC(self.inst.screen.vnc, timeout=10)
+            v.request(False)
+            while not self._stop.is_set():
+                if v.read_update():
+                    # scaled down here, on the worker thread: the UI thread only draws small pictures
+                    self.sig.frame.emit(QImage(bytes(v.fb), v.width, v.height, v.width * 4, QImage.Format_RGB32)
+                                        .scaled(480, 270, Qt.KeepAspectRatio, Qt.SmoothTransformation))
+                    if self._stop.wait(1.0 / self.FPS):
+                        break
+                    v.request(True)
+        except Exception as ex:
+            if not self._stop.is_set():
+                self.sig.failed.emit(str(ex))
+        finally:
+            if v:
+                v.close()
+
+    def stop(self):
+        self._stop.set()
+
+    def _show(self, img: QImage):
+        self.img, self.error = img, ""
+        self.update()
+
+    def _failed(self, msg: str):
+        self.error = msg
+        self.update()
+
+    def mousePressEvent(self, ev):
+        if ev.button() == Qt.LeftButton:
+            self.clicked.emit()
+
+    def paintEvent(self, _):
+        from .. import theme
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing)
+        p.setRenderHint(QPainter.SmoothPixmapTransform)
+        bar = 26
+        r = self.rect().adjusted(0, 0, -1, -1)
+        p.setPen(theme.qc("border"))
+        p.setBrush(theme.qc("surface"))
+        p.drawRoundedRect(r, 8, 8)
+        pic = QRect(r.x() + 6, r.y() + 6, r.width() - 12, r.height() - bar - 12)
+        if self.img:
+            s = self.img.size().scaled(pic.size(), Qt.KeepAspectRatio)
+            p.drawImage(QRect(QPoint(pic.x() + (pic.width() - s.width()) // 2,
+                                     pic.y() + (pic.height() - s.height()) // 2), s), self.img)
+        else:
+            p.fillRect(pic, QColor(12, 12, 14))
+            p.setPen(theme.qc("muted"))
+            p.drawText(pic, Qt.AlignCenter | Qt.TextWordWrap,
+                       "No picture: " + self.error if self.error else "Connecting...")
+        p.setPen(theme.qc("text"))
+        f = p.font()
+        f.setBold(True)
+        p.setFont(f)
+        p.drawText(QRect(r.x() + 10, r.bottom() - bar, r.width() - 20, bar - 4), Qt.AlignVCenter | Qt.AlignLeft,
+                   self.inst.account.name)
+        badge = "❄ frozen" if self.inst.frozen else ("● macro" if self.inst.macro and self.inst.macro.running else "")
+        if badge:
+            f.setBold(False)
+            p.setFont(f)
+            p.setPen(theme.qc("warn" if self.inst.frozen else "accent"))
+            p.drawText(QRect(r.x() + 10, r.bottom() - bar, r.width() - 20, bar - 4),
+                       Qt.AlignVCenter | Qt.AlignRight, badge)
+
+
+class ScreenWall(QDialog):
+    """Every background account's screen in one window. Click one to open it (watch, control, record)."""
+
+    def __init__(self, mw):
+        super().__init__(mw)
+        from PySide6.QtCore import QTimer
+        from PySide6.QtWidgets import QGridLayout, QScrollArea
+        self.mw = mw
+        self.setWindowTitle("Screen wall - background accounts")
+        self.resize(1180, 760)
+        v = QVBoxLayout(self)
+        self.info = QLabel()
+        v.addWidget(self.info)
+        area = QScrollArea()
+        area.setWidgetResizable(True)
+        inner = QWidget()
+        self.grid = QGridLayout(inner)
+        self.grid.setSpacing(10)
+        area.setWidget(inner)
+        v.addWidget(area, 1)
+        self.tiles: dict = {}
+        self.cols = 0
+        self.timer = QTimer(self, interval=2000, timeout=self.refresh)
+        self.timer.start()
+        self.refresh()
+
+    def refresh(self):
+        insts = [i for i in self.mw.launcher.alive_instances() if i.screen]
+        live = {id(i) for i in insts}
+        for key in [k for k in self.tiles if k not in live]:
+            t = self.tiles.pop(key)
+            t.stop()
+            t.deleteLater()
+        for i in insts:
+            if id(i) not in self.tiles:
+                t = _Tile(i)
+                t.clicked.connect(lambda inst=i: self.mw.view_screen(inst))
+                self.tiles[id(i)] = t
+        order = sorted(insts, key=lambda i: i.account.order)
+        cols = max(1, min(4, (self.width() - 40) // 280))
+        for t in self.tiles.values():
+            self.grid.removeWidget(t)
+        tile_w = (self.width() - 60 - 10 * (cols - 1)) // cols
+        for n, i in enumerate(order):
+            t = self.tiles[id(i)]
+            t.setFixedHeight(max(168, tile_w * 9 // 16 + 38))      # 16:9 picture + name bar
+            self.grid.addWidget(t, n // cols, n % cols)
+        self.grid.setRowStretch(self.grid.rowCount(), 1)
+        for t in self.tiles.values():
+            t.update()                      # badges (macro / frozen)
+        self.info.setText(f"{len(insts)} background account(s) - about one picture a second each. Click one to open "
+                          "its screen." if insts else
+                          "No account runs in the background. Edit an account > Run in the background, then launch it.")
+
+    def resizeEvent(self, ev):
+        super().resizeEvent(ev)
+        self.refresh()
+
+    def done(self, r):
+        self.timer.stop()
+        for t in self.tiles.values():
+            t.stop()
         super().done(r)

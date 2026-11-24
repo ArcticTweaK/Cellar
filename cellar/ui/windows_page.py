@@ -1,4 +1,4 @@
-"""Windows page: arrange Sober windows in a grid through KWin."""
+"""Windows page: arrange Sober windows in a grid (KWin on KDE Plasma, or Hyprland / Sway - see wm.py)."""
 
 import time
 from typing import Dict, List, Optional, Set
@@ -8,7 +8,7 @@ from PySide6.QtGui import QColor, QPainter, QPen
 from PySide6.QtWidgets import (QAbstractItemView, QComboBox, QHBoxLayout, QHeaderView, QLabel, QSizePolicy,
                                QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget, QSplitter, QScrollArea)
 
-from .. import layout, sober, store, util
+from .. import layout, sober, store, theme, util
 from ..kwin import Screen, Win
 from .common import btn, chk, combo, group, hint, row, spin
 
@@ -44,7 +44,7 @@ class Preview(QWidget):
         p.fillRect(m(*self.full), pal.window().color().darker(115))
         p.setPen(QPen(pal.mid().color(), 1, Qt.DashLine))
         p.drawRect(m(*self.area))
-        accent = QColor("#5865F2")
+        accent = theme.qc("accent")
         for i, r in enumerate(self.rects):
             rr = m(*r)
             c = QColor(accent)
@@ -77,7 +77,7 @@ class WindowsPage(QWidget):
         left = QWidget()
         lv = QVBoxLayout(left)
         L = lambda: store.settings.layout
-        self.no_kwin = hint("<b>KWin was not found.</b> Window layout needs KDE Plasma (Wayland or X11).")
+        self.no_kwin = hint("<b>No window control found.</b> Window layout needs KDE Plasma, Hyprland or Sway.")
         self.no_kwin.setVisible(False)
         lv.addWidget(self.no_kwin)
 
@@ -123,7 +123,9 @@ class WindowsPage(QWidget):
         f.addRow(row(self.auto, self.auto_delay))
         lv.addWidget(g)
         lv.addWidget(row(btn("Arrange now", self.arrange, icon="view-grid", primary=True),
-                         btn("Restore borders", self.restore_borders)))
+                         btn("Restore borders", self.restore_borders),
+                         btn("Screen wall", lambda: self.mw.open_screen_wall(),
+                             tip="Live pictures of every background account in one window")))
         lv.addStretch(1)
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
@@ -321,7 +323,7 @@ class WindowsPage(QWidget):
     def arrange(self, quiet: bool = False):
         kw = self.mw.kwin
         if kw is None or not kw.available():
-            self.mw.log("Window layout needs KDE Plasma (KWin).")
+            self.mw.log("Window layout needs KDE Plasma, Hyprland or Sway.")
             return
         self.wins = kw.windows()
         grid = self.ordered()

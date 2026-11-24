@@ -1,12 +1,63 @@
 """Macros tab: write / check / run macros for background accounts."""
 
-from PySide6.QtGui import QFontDatabase
-from PySide6.QtWidgets import (QCheckBox, QHBoxLayout, QLabel, QLineEdit, QListWidget, QPlainTextEdit, QPushButton,
-                               QSplitter, QVBoxLayout, QWidget)
+import re
+from pathlib import Path
 
-from .. import macros, store
+from PySide6.QtCore import QTimer
+from PySide6.QtGui import QFont, QSyntaxHighlighter, QTextCharFormat
+
+from PySide6.QtWidgets import (QCheckBox, QFileDialog, QHBoxLayout, QLabel, QLineEdit, QListWidget, QPlainTextEdit,
+                               QPushButton, QSplitter, QVBoxLayout, QWidget)
+
+from .. import macros, store, theme
 from ..models import Macro
 from .common import hint
+
+
+_OPS = {"tap", "down", "up", "key", "type", "click", "rclick", "move", "scroll", "wait", "repeat", "random", "stop"}
+
+
+class MacroHighlighter(QSyntaxHighlighter):
+    """Steps in the accent colour, numbers and times highlighted, comments grey, unknown steps red."""
+
+    def __init__(self, doc):
+        super().__init__(doc)
+        self.bad_lines: set = set()
+
+    def _fmt(self, token: str, bold: bool = False) -> QTextCharFormat:
+        f = QTextCharFormat()
+        f.setForeground(theme.qc(token))
+        if bold:
+            f.setFontWeight(QFont.Bold)
+        return f
+
+    def highlightBlock(self, text: str):
+        stripped = text.lstrip()
+        start = len(text) - len(stripped)
+        if not stripped:
+            return
+        if stripped.startswith("#"):
+            self.setFormat(0, len(text), self._fmt("muted"))
+            return
+        op = stripped.split(" ", 1)[0]
+        known = op.lower() in _OPS or op == "}"
+        self.setFormat(start, len(op), self._fmt("accent" if known else "bad", bold=True))
+        if op.lower() == "type":                # the rest is literal text, '#' included
+            return
+        body = stripped[len(op):]
+        hash_at = body.find("#")
+        code = body if hash_at < 0 else body[:hash_at]
+        for m in re.finditer(r"\b\d+(?:-\d+)?(?:ms|s|m|h)?\b|[{}]", code):
+            self.setFormat(start + len(op) + m.start(), m.end() - m.start(),
+                           self._fmt("accent" if m.group() in "{}" else "warn"))
+        if hash_at >= 0:
+            self.setFormat(start + len(op) + hash_at, len(body) - hash_at, self._fmt("muted"))
+        if self.currentBlock().blockNumber() + 1 in self.bad_lines:     # keep the colours, add a red wave
+            for i in range(start, len(text)):
+                cur = self.format(i)
+                cur.setUnderlineStyle(QTextCharFormat.WaveUnderline)
+                cur.setUnderlineColor(theme.qc("bad"))
+                self.setFormat(i, 1, cur)
 
 
 class MacrosPage(QWidget):
@@ -31,6 +82,14 @@ class MacrosPage(QWidget):
             b.clicked.connect(fn)
             row.addWidget(b)
         lv.addLayout(row)
+        row = QHBoxLayout()
+        for text, fn, tip in (("Import...", self._import, "Load macros from .txt files (shared by friends)"),
+                              ("Export...", self._export, "Save this macro as a .txt file to share")):
+            b = QPushButton(text)
+            b.setToolTip(tip)
+            b.clicked.connect(fn)
+            row.addWidget(b)
+        lv.addLayout(row)
         split.addWidget(left)
 
         right = QWidget()
@@ -44,15 +103,18 @@ class MacrosPage(QWidget):
         top.addWidget(self.loop)
         rv.addLayout(top)
         self.text = QPlainTextEdit()
-        self.text.setFont(QFontDatabase.systemFont(QFontDatabase.FixedFont))
+        self.text.setFont(theme.mono_font())
         self.text.setPlaceholderText("tap space\nwait 1000")
+        self.hl = MacroHighlighter(self.text.document())
+        self._live = QTimer(self, singleShot=True, interval=400, timeout=lambda: self._check(live=True))
+        self.text.textChanged.connect(self._live.start)
         rv.addWidget(self.text, 1)
         self.result = QLabel("")
         self.result.setWordWrap(True)
         rv.addWidget(self.result)
         row = QHBoxLayout()
-        for text, fn in (("Check", self._check), ("Save", self._save),
-                         ("Run on selected accounts", self._run), ("Stop on selected accounts", self._stop)):
+        for text, fn in (("Save", self._save), ("Run on selected accounts", self._run),
+                         ("Run once (test)", self._run_once), ("Stop on selected accounts", self._stop)):
             b = QPushButton(text)
             b.clicked.connect(fn)
             row.addWidget(b)
@@ -115,13 +177,75 @@ class MacrosPage(QWidget):
             store.save_settings()
             self.load()
 
+    # ---- share
+    def _export(self):
+        m = self._current()
+        if not m:
+            return
+        safe = "".join(c if c.isalnum() or c in " -_" else "_" for c in m.name).strip() or "macro"
+        fn, _ = QFileDialog.getSaveFileName(self, "Export macro", str(Path.home() / f"{safe}.txt"),
+                                            "Cellar macro (*.txt)")
+        if not fn:
+            return
+        try:
+            Path(fn).write_text(f"# Cellar macro: {m.name}\n# loop: {'yes' if m.loop else 'no'}\n{m.text}",
+                                encoding="utf-8")
+            self.result.setText(f"Saved to {fn}.")
+        except OSError as ex:
+            self.result.setText(theme.span("bad", f"Could not save: {ex}"))
+
+    def _import(self):
+        files, _ = QFileDialog.getOpenFileNames(self, "Import macros", str(Path.home()),
+                                                "Cellar macros (*.txt);;All files (*)")
+        done, bad, last = 0, [], ""
+        for fn in files:
+            try:
+                text = Path(fn).read_text(encoding="utf-8", errors="replace")
+            except OSError as ex:
+                bad.append(f"{Path(fn).name}: {ex}")
+                continue
+            name, loop, body = Path(fn).stem, True, []
+            for line in text.splitlines():
+                low = line.strip().lower()
+                if low.startswith("# cellar macro:"):
+                    name = line.split(":", 1)[1].strip() or name
+                elif low.startswith("# loop:"):
+                    loop = low.split(":", 1)[1].strip() in ("yes", "true", "1")
+                else:
+                    body.append(line)
+            body_text = "\n".join(body).strip() + "\n"
+            _, errors = macros.parse(body_text)
+            if errors:
+                bad.append(f"{Path(fn).name}: {errors[0]}")
+                continue
+            last = self._unique(name)
+            store.settings.macros.append(Macro(name=last, text=body_text, loop=loop))
+            done += 1
+        if done:
+            store.save_settings()
+            self.load(last)
+        msg = f"Imported {done} macro(s)." if done else ""
+        if bad:
+            msg += ("<br>" if msg else "") + theme.span("bad", "Skipped: " + "<br>".join(bad))
+        if msg:
+            self.result.setText(msg)
+
     # ---- edit
-    def _check(self) -> bool:
-        steps, errors = macros.parse(self.text.toPlainText())
+    def _check(self, live: bool = False) -> bool:
+        """Runs while you type (live) and before saving / running: mistakes are underlined on their line."""
+        text = self.text.toPlainText()
+        steps, errors = macros.parse(text)
+        bad = {int(m.group(1)) for e in errors if (m := re.match(r"line (\d+):", e))}
+        if bad != self.hl.bad_lines:
+            self.hl.bad_lines = bad
+            self.hl.rehighlight()
         if errors:
-            self.result.setText("<span style='color:#c0392b'>" + "<br>".join(errors) + "</span>")
+            self.result.setText(theme.span("bad", "<br>".join(errors)))
             return False
-        self.result.setText(f"OK - {len(steps)} steps.")
+        if not text.strip():
+            self.result.setText("")
+            return not live
+        self.result.setText(theme.span("good", f"✓ OK - {_count(steps)} steps."))
         return True
 
     def _save(self):
@@ -160,6 +284,25 @@ class MacrosPage(QWidget):
         for i in insts:
             self.mw.launcher.start_macro(i, m.name, self.mw.log)
 
+    def _run_once(self):
+        """Runs the text as it is in the editor once (saved or not) - to try a change before saving it."""
+        if not self._check():
+            return
+        insts = self._targets()
+        if not insts:
+            self.mw.log("Select running background accounts first (Edit account > Run in the background, then launch).")
+            return
+        name = (self.name.text().strip() or "macro") + " (test)"
+        for i in insts:
+            self.mw.launcher.start_macro_text(i, name, self.text.toPlainText(), False, self.mw.log)
+
     def _stop(self):
         n = sum(1 for i in self._targets() if self.mw.launcher.stop_macro(i))
         self.mw.log(f"Stopped {n} macro(s)." if n else "No macros were running on the selected accounts.")
+
+
+def _count(steps) -> int:
+    n = 0
+    for op, args in steps:
+        n += 1 + (_count(args[-1]) if op in ("repeat", "random") else 0)
+    return n

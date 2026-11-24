@@ -5,7 +5,8 @@ import os
 import shutil
 import threading
 import time
-from typing import List, Optional
+from pathlib import Path
+from typing import List, Optional, Tuple
 
 from . import crypto, log, paths
 from .models import Account, AppSettings, LiveInfo, from_dict, to_dict
@@ -249,6 +250,39 @@ def backup() -> None:
             f.unlink()
     except OSError:
         pass
+
+
+def export_accounts(f: Path, accs: List[Account], pw: str) -> None:
+    """A password-protected copy of these accounts for another PC: the same 'P' format as accounts.dat (also
+    readable by the Windows app). Import it with Add account > Import accounts file."""
+    data = json.dumps({"accounts": [to_dict(a) for a in accs]}).encode("utf-8")
+    atomic_write(f, crypto.encrypt_password(data, pw), 0o600)
+
+
+def backups() -> List[Path]:
+    """Newest first."""
+    try:
+        return sorted(paths.BACKUP_DIR.glob("accounts_*.dat"), reverse=True)
+    except OSError:
+        return []
+
+
+def read_backup(f: Path) -> Tuple[Optional[List[Account]], str]:
+    """(accounts, '') or (None, why). Uses the current password / keyring, like the file it came from."""
+    try:
+        return accounts_from_json(decrypt_file(f.read_bytes(), password)), ""
+    except crypto.DecryptError as ex:
+        return None, str(ex)
+    except Exception as ex:
+        return None, f"Could not read it: {ex}"
+
+
+def restore(accs: List[Account]) -> None:
+    """Replaces the account list with a backup's (the current file is backed up first)."""
+    global accounts
+    backup()
+    accounts = sorted(accs, key=lambda a: a.order)
+    save_accounts()
 
 
 def renumber() -> None:

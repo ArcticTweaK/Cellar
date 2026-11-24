@@ -2,7 +2,7 @@
 
 import threading
 import time
-from typing import List, Optional
+from typing import Optional
 
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import (QAbstractItemView, QComboBox, QHeaderView, QInputDialog, QLineEdit, QTreeWidget,
@@ -40,7 +40,8 @@ class PresetsPage(QWidget):
         self.tree.itemSelectionChanged.connect(self._sel)
         f.addRow(self.tree)
         f.addRow(row(btn("Run", self.run_selected, icon="media-playback-start", primary=True), btn("Update", self.update_selected),
-                     btn("Rename...", self.rename), btn("Details", self.details), btn("Delete", self.delete, icon="edit-delete")))
+                     btn("Rename...", self.rename), btn("Details", self.details), btn("Delete", self.delete, icon="edit-delete"),
+                     btn("Add to app menu", self.add_shortcut, tip="A launcher entry that runs this preset")))
         v.addWidget(g, 1)
 
         g, f = group("Options")
@@ -92,6 +93,14 @@ class PresetsPage(QWidget):
             self.startup.addItem(p.name, p.name)
         self.startup.setCurrentIndex(max(0, self.startup.findData(store.settings.startup_preset)))
         self._loading = False
+
+    def add_shortcut(self):
+        from .. import cli
+        p = self.selected()
+        if not p:
+            return
+        cli.add_shortcut(f"Cellar: {p.name}", ["preset", p.name])
+        self.mw.log(f"Added '{p.name}' to your app menu (search 'Cellar: {p.name}').")
 
     def find(self, name: str) -> Optional[Preset]:
         return next((p for p in store.settings.presets if p.name.lower() == (name or "").lower()), None)
@@ -186,7 +195,7 @@ class PresetsPage(QWidget):
             return
         lines = [f"Preset: {p.name}", f"Saved: {util.ago(p.saved)}", ""]
         for e in p.entries:
-            where = e.spec.describe() if e.spec else "own game / Launch page"
+            where = e.spec.describe() if e.spec else "own game / Accounts page"
             rect = f"  window {e.x},{e.y} {e.w}x{e.h}" + (" borderless" if e.borderless else "") if e.has_rect else ""
             lines.append(f"{e.grid_index + 1}. {self.entry_name(e)}: {where}{rect}" + ("" if e.include else "  (not in grid)"))
         s = p.settings
@@ -238,7 +247,7 @@ class PresetsPage(QWidget):
                 if spec is None:
                     spec = specs.saved_spec(a) or specs.resolve_form(form, a, mw.log)
                 if spec is None:
-                    mw.log(f"[{a.name}] skipped - no game saved for it and none on the Launch page.")
+                    mw.log(f"[{a.name}] skipped - no game saved for it and none on the Accounts page.")
                     continue
                 if spec.kind == "Private" and spec.share_code and not spec.link_code:
                     if not specs.resolve_saved_share(a, spec, mw.log):
@@ -260,18 +269,18 @@ class PresetsPage(QWidget):
         if not mw.kwin or not mw.kwin.available():
             return
         wins = {sober.tracker_of_pid(w.pid): w for w in mw.kwin.windows()}
-        want = []
+        want = []           # (entry, account, window or None); looked up every round: accounts can be removed
         for e in p.entries:
             a = store.find_by_id(e.account_id)
             if a and a.tracker_id:
-                want.append((e, wins.get(a.tracker_id)))
-        if any(w is None for _, w in want) and time.time() < deadline:
+                want.append((e, a, wins.get(a.tracker_id)))
+        if any(w is None for _, _, w in want) and time.time() < deadline:
             QTimer.singleShot(2000, lambda: self._place_when_ready(p, deadline))
             return
         grid = mw.windows_page
-        grid.excluded = {store.find_by_id(e.account_id).tracker_id for e, _ in want if not e.include}
-        grid.order = [store.find_by_id(e.account_id).tracker_id for e, _ in sorted(want, key=lambda t: t[0].grid_index)]
-        saved = {w.id: (e.x, e.y, e.w, e.h, e.borderless, e.minimized) for e, w in want if w and e.has_rect}
+        grid.excluded = {a.tracker_id for e, a, _ in want if not e.include}
+        grid.order = [a.tracker_id for e, a, _ in sorted(want, key=lambda t: t[0].grid_index)]
+        saved = {w.id: (e.x, e.y, e.w, e.h, e.borderless, e.minimized) for e, _, w in want if w and e.has_rect}
         if saved:
             grid.place_saved(saved)
             mw.log(f"Preset '{p.name}': {len(saved)} window(s) moved to their saved place.")

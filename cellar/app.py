@@ -1,5 +1,6 @@
 """Entry point."""
 
+import json
 import os
 import signal
 import sys
@@ -38,22 +39,48 @@ def _unlock(parent=None) -> bool:
         return False
 
 
+def _apply_ui_scale() -> None:
+    """Settings > Appearance > Size: Qt's own scale factor makes everything bigger together (text, icons,
+    spacing, pictures). It has to be set before the QApplication exists, so it is read straight from the file."""
+    if os.environ.get("QT_SCALE_FACTOR"):              # the user (or the desktop) already chose one
+        return
+    try:
+        with open(paths.SETTINGS_FILE, encoding="utf-8") as f:
+            d = json.load(f)
+        v = str(d.get("ui_scale", "auto"))
+        factor = float(d.get("auto_scale", 1.0)) if v == "auto" else int(v) / 100
+    except (OSError, ValueError, TypeError):
+        return
+    if 0.5 <= factor <= 3 and abs(factor - 1) > 0.01:
+        os.environ["QT_SCALE_FACTOR"] = f"{factor:.2f}"
+
+
+def auto_scale_for(width: int) -> float:
+    """'Auto' size from the primary screen's width in logical pixels (after the desktop's own scaling)."""
+    return 1.3 if width >= 3200 else 1.15 if width >= 2300 else 1.0
+
+
 def main(argv=None) -> int:
     argv = list(sys.argv if argv is None else argv)
     if "--version" in argv:
         print(f"{APP_ID} {__version__}")
         return 0
+    from . import cli
+    pending_cmd = None
+    if cli.is_cli(argv):
+        rc = cli.main(argv)
+        if rc is not None:
+            return rc
+        pending_cmd = argv[1:]          # Cellar is not running: start it, then do the command
 
-    # Qt WebEngine (browser login) must be imported before the QApplication exists.
+    # Qt WebEngine (browser login) needs shared OpenGL contexts set before the QApplication exists. The module
+    # itself is only imported when a login window opens (browser_login): that saves ~36 MB for everyone else.
     from PySide6.QtCore import QCoreApplication, Qt
     QCoreApplication.setAttribute(Qt.AA_ShareOpenGLContexts)
-    try:
-        import PySide6.QtWebEngineWidgets  # noqa: F401
-    except Exception:
-        pass
     from PySide6.QtNetwork import QLocalServer, QLocalSocket
     from PySide6.QtWidgets import QApplication
 
+    _apply_ui_scale()
     app = QApplication(argv)
     app.setApplicationName(APP_ID)
     app.setApplicationDisplayName(APP_NAME)
@@ -64,10 +91,12 @@ def main(argv=None) -> int:
 
     # one copy only - a second start just shows the first one
     sock_name = f"{APP_ID}-{os.getuid()}"
+    from . import playlink
+    link = next((a for a in argv[1:] if playlink.is_link(a)), "")
     probe = QLocalSocket()
     probe.connectToServer(sock_name)
     if probe.waitForConnected(400):
-        probe.write(b"show")
+        probe.write(b"open " + link.encode() if link else b"show")
         probe.flush()
         probe.waitForBytesWritten(400)
         return 0
@@ -91,30 +120,66 @@ def main(argv=None) -> int:
     moved = paths.migrate_old_name()
     paths.ensure_dirs()
     log.init()
+    from . import crash
+    if crash.previous_crash():
+        log.write(f"Cellar closed unexpectedly last time. What it was doing is saved in {crash.LAST_CRASH_FILE} "
+                  "- please include that file if you report the problem.")
+    crash.install()
     for m in moved:
         log.write("rename to Cellar: " + m)
     from . import sober
     if not sober.old_clients_running() and paths.drop_old_link():
         log.write(f"rename to Cellar: removed the link at {paths.OLD_DATA_DIR} (no account from before runs any more)")
     store.load_settings()
+    scr = app.primaryScreen()
+    if scr is not None:     # remember what 'auto' should use next time (the scale itself is set before Qt starts)
+        own = float(os.environ.get("QT_SCALE_FACTOR") or 1)
+        store.settings.auto_scale = auto_scale_for(int(scr.geometry().width() * own))
+        store.save_settings()
+    from . import theme
+    theme.apply(store.settings.theme)
     if not _unlock():
         return 0
 
+    from PySide6.QtCore import QTimer
     from .ui.main_window import MainWindow
-    hidden = "--minimized" in argv or store.settings.start_minimized_to_tray
+    hidden = "--minimized" in argv or store.settings.start_minimized_to_tray or (
+        pending_cmd is not None and pending_cmd[0] != "show")
     w = MainWindow(start_hidden=hidden)
     if not hidden or w.tray is None:
         w.show()
 
     def on_conn():
         c = server.nextPendingConnection()
-        if c:
-            c.readyRead.connect(lambda: (w.showNormal(), w.raise_(), w.activateWindow()))
+        if not c:
+            return
+
+        def read():
+            msg = bytes(c.readAll()).decode(errors="replace")
+            if msg.startswith("open "):
+                w.open_play_link(msg[5:])
+            elif msg.startswith("cmd "):
+                try:
+                    reply = w.run_command(json.loads(msg[4:]))
+                except Exception as ex:
+                    reply = f"ERR {ex}"
+                c.write(reply.encode() + b"\0")
+                c.flush()
+            else:
+                w.showNormal()
+                w.raise_()
+                w.activateWindow()
+        c.readyRead.connect(read)
     server.newConnection.connect(on_conn)
+    if link:
+        QTimer.singleShot(1500, lambda: w.open_play_link(link))
+    if pending_cmd:
+        QTimer.singleShot(2500, lambda: w.log(w.run_command(pending_cmd)))
 
     # let Python handle Ctrl+C in a terminal
-    from PySide6.QtCore import QTimer
     t = QTimer()
     t.start(500)
     t.timeout.connect(lambda: None)
-    return app.exec()
+    rc = app.exec()
+    crash.uninstall()
+    return rc

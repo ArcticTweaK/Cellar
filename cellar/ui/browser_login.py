@@ -14,12 +14,10 @@ from PySide6.QtWidgets import QDialog, QLabel, QVBoxLayout
 
 from .common import bg
 
-try:
-    from PySide6.QtWebEngineCore import QWebEnginePage, QWebEngineProfile
-    from PySide6.QtWebEngineWidgets import QWebEngineView
-    HAVE_WEBENGINE = True
-except Exception:   # pragma: no cover
-    HAVE_WEBENGINE = False
+# Imported on first use (see app.py): just check that it is there.
+import importlib.util
+
+HAVE_WEBENGINE = importlib.util.find_spec("PySide6.QtWebEngineWidgets") is not None
 
 _profile = None
 
@@ -29,6 +27,7 @@ def _shared_profile():
     page is never left without its profile when a dialog goes away."""
     global _profile
     if _profile is None:
+        from PySide6.QtWebEngineCore import QWebEngineProfile
         from PySide6.QtWidgets import QApplication
         _profile = QWebEngineProfile(QApplication.instance())     # no storage name = off the record
         _profile.setHttpUserAgent(re.sub(r"\s*QtWebEngine/\S+", "", _profile.httpUserAgent()))
@@ -75,6 +74,8 @@ class BrowserLogin(QDialog):
         self.info.setContentsMargins(10, 8, 10, 8)
         v.addWidget(self.info)
 
+        from PySide6.QtWebEngineCore import QWebEnginePage
+        from PySide6.QtWebEngineWidgets import QWebEngineView
         self.profile = _shared_profile()
         self.profile.cookieStore().deleteAllCookies()
         self.page = QWebEnginePage(self.profile, self.view_parent())

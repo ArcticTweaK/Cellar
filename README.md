@@ -17,6 +17,15 @@ many as you want at the same time, and let them farm in the background while you
 
 ## What it does
 
+- **Feels like a game launcher.** Big HOME · LIBRARY · ACCOUNTS · FRIENDS tabs, back / forward, a status bar,
+  and a size setting so text and buttons are easy to read (Settings > Appearance > Size).
+- **Library and profiles.** Your games in one place (recent, favourites, private servers) with a "jump back in"
+  tile, and a profile page for every account: avatar, Robux, Premium, friends, groups, badges and what it played.
+- **Home.** Everything you'd open the Roblox website for: search games, continue playing, see which friends are
+  online and join them, your favourites, and Roblox's popular and trending lists. Every game has a page with
+  **Play** - pick which account plays, or play in your normal Sober - and your saved private servers. Quick join
+  picks the emptiest server (or a busy one with room for all your accounts), and Cellar can tell you when a
+  friend starts playing, with a Join button.
 - **Many accounts at once.** Sober normally allows one copy per PC. Cellar gives every account its own isolated
   Sober, and your normal Sober keeps working next to them.
 - **Background mode.** An account can run on its own invisible screen with its own mouse and keyboard. Nothing
@@ -24,11 +33,30 @@ many as you want at the same time, and let them farm in the background while you
 - **Macros per account.** Plain text or recorded. One account spams F on a berry bush while another does
   something else, and your own mouse and keyboard stay yours.
 - **Cheap alts.** Alts default to 30 FPS and the lowest graphics: about 0.17 CPU cores and 1 GB RAM each. Your
-  main can stay on full quality. The header shows live what all your accounts use together (CPU, memory).
+  main can stay on full quality. The header shows what all your accounts use together, the list what each one
+  uses. Right-click > **Freeze** pauses an alt without closing it; it wakes for a moment every few seconds so it stays
+  in the server.
+- **Screen wall.** Live pictures of every background account in one window; click one to take over.
+- **Kicks noticed in seconds.** Cellar reads each account's Roblox log: a kick or lost connection shows a desktop
+  notification and can rejoin right away (the same server after a lost connection).
 - **Joining.** Join by game, private server link, server browser, or follow a friend from the Friends tab.
-- **The rest:** window layouts (KDE Plasma), anti-AFK, presets, per-account FPS/graphics, a RAM limit per alt,
+  Right-click an account > **Bring accounts to its server** sends your alts into the exact server it is in.
+- **The website's Play button.** Turn it on in Settings and pressing Play on roblox.com asks which of your
+  accounts should join that game, server or private server - or sends it on to your normal Sober.
+- **My Sober.** For your normal Sober too, even with one account: its settings in plain language, FPS cap,
+  a Fast Flags editor that shows which flags Roblox really uses, and cleanup of caches and crash dumps.
+- **Account switcher.** Right-click an account > **Use in my normal Sober** logs your normal Sober into it.
+  The account it had is saved first, so you can always switch back.
+- **Themes.** Blossom (pink), Midnight, Mint, Ember, Graphite, Daylight, or your desktop's own look
+  (Settings > Appearance). It switches right away.
+- **Moving PCs.** Export your accounts to a password-protected file and import them on the new PC. Every server
+  your accounts joined is kept in a history you can rejoin from.
+- **Easy start.** A short setup on first start checks your system and shows the exact install command for
+  anything missing. Cellar tells you when a new version is out (once a day from GitHub; can be turned off).
+- **The rest:** window layouts (KDE Plasma, Hyprland, Sway), anti-AFK, presets, per-account FPS/graphics, a RAM limit per alt,
   auto-relaunch when a window crashes or leaves the game, Discord webhooks, and encrypted accounts (your
-  keyring or a password).
+  keyring or a password). If something goes wrong, Settings > System check > **Copy report** gives you a
+  bug report with your cookies removed.
 
 ## Install
 
@@ -59,7 +87,7 @@ from the menu. It tells you if anything is still missing. To **update**: `git pu
 
 What each package is for: `passt` (pasta) and `util-linux` (unshare) run several accounts at once, `sway` +
 `wayvnc` run background mode, `flatpak` runs Sober, and the two small libraries are for Qt (most desktops
-already have them). Window layouts need KDE Plasma. Everything else works on any desktop.
+already have them). Window layouts need KDE Plasma, Hyprland or Sway. Everything else works on any desktop.
 
 ### NixOS
 
@@ -110,10 +138,34 @@ wait 18
 | `click 640 360` / `rclick x y` / `move x y` | mouse on the account's own screen |
 | `scroll up` / `scroll down` | mouse wheel |
 | `wait 1500` / `wait 1000-3000` | wait (a range picks a random time) |
+| `repeat 5 {` … `}` | do the lines inside five times (blocks can be nested) |
+| `random {` … `}` | each time, do one of the lines inside, picked at random |
+| `stop after 30m` | end the macro after that long (`90s`, `2h` work too) |
 | `# ...` | comment |
 
-A looping macro needs at least one `wait` or `key` step. Each background account runs its own macro, and one
+The editor colours the steps and underlines mistakes on their line while you type; **Run once (test)** runs
+what is in the editor once, without saving it. A looping macro needs at least one `wait` or `key` step. Each background account runs its own macro, and one
 can start by itself at launch (Edit account > Macro at launch).
+
+## Command line and shortcuts
+
+Control the running Cellar from a terminal, a script or a keyboard shortcut of your desktop:
+
+```sh
+cellar list                                  # accounts and what they are doing
+cellar launch ArcticTweaK alt2               # each in its own game (or the one on the Launch page)
+cellar launch group:Farm --place 920587237   # a whole group into one game
+cellar launch all --job PLACE JOB_ID         # everyone into one exact server
+cellar preset "Evening farm"                 # run a saved preset
+cellar stop all
+```
+
+`launch` and `preset` start Cellar first if it is not running. Right-click an account (or a preset) >
+**Add to app menu** makes a launcher entry for it.
+
+In the window: **Ctrl+K** opens the command palette (type a few letters of an account, page, preset, game or
+theme and press Enter), **Enter** launches the selected accounts, **F2** edits, **Ctrl+N** adds an account,
+**Ctrl+Shift+S** stops all, **Ctrl+1…0** switch pages, **Ctrl+F** searches, **F5** refreshes the status.
 
 ## Measured numbers
 

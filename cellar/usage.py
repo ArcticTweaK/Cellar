@@ -64,11 +64,49 @@ def _read(g: Path) -> Tuple[int, int]:
     return usec, max(mem, 0)
 
 
+def mem_available() -> int:
+    """Bytes of RAM free for new programs (the kernel's MemAvailable: free + cache it can drop)."""
+    try:
+        with open("/proc/meminfo") as f:
+            for line in f:
+                if line.startswith("MemAvailable:"):
+                    return int(line.split()[1]) * 1024
+    except (OSError, ValueError):
+        pass
+    return 0
+
+
+def cgroup_of(pid: int) -> Optional[Path]:
+    return _cgroup_of(pid)
+
+
 class Sampler:
     """Call sample() every few seconds; CPU is the average since the previous call."""
 
     def __init__(self):
         self._last: Dict[Path, Tuple[int, float]] = {}
+
+    def sample_each(self, groups_by_key: Dict[str, List[Path]]) -> Dict[str, Tuple[Optional[float], int]]:
+        """Per key (account id): (CPU in cores or None until measured, memory). Plus "" = all of them together."""
+        now = time.monotonic()
+        new: Dict[Path, Tuple[int, float]] = {}
+        per: Dict[Path, Tuple[Optional[float], int]] = {}
+        for g in {g for gs in groups_by_key.values() for g in gs}:
+            try:
+                usec, m = _read(g)
+            except (OSError, ValueError):
+                continue
+            new[g] = (usec, now)
+            prev = self._last.get(g)
+            cores = max(usec - prev[0], 0) / 1e6 / (now - prev[1]) if prev and now > prev[1] else None
+            per[g] = (cores, m)
+        self._last = new
+        out: Dict[str, Tuple[Optional[float], int]] = {}
+        for key, gs in list(groups_by_key.items()) + [("", sorted(per))]:
+            vals = [per[g] for g in gs if g in per]
+            measured = [c for c, _ in vals if c is not None]
+            out[key] = (sum(measured) if measured or not vals else None, sum(m for _, m in vals))
+        return out
 
     def sample(self, groups: List[Path]) -> Tuple[Optional[float], int]:
         """(CPU in cores - None until there is a previous sample to compare with, memory in bytes)."""

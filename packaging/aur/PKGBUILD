@@ -1,0 +1,39 @@
+# Maintainer: ArcticTweaK
+# AUR package "cellar-git": builds the newest commit from GitHub.
+# Publish: copy this file into the AUR repo, run `makepkg --printsrcinfo > .SRCINFO`, commit, push.
+pkgname=cellar-git
+pkgver=1.0.0.r0.g0000000
+pkgrel=1
+pkgdesc="Run many Roblox accounts at once on Linux through Sober"
+arch=('any')
+url="https://github.com/ArcticTweaK/Cellar"
+license=('GPL-3.0-only')
+depends=('python' 'pyside6' 'python-requests' 'python-cryptography' 'python-secretstorage'
+         'flatpak' 'passt' 'util-linux' 'systemd' 'sway' 'wayvnc' 'xdg-utils')
+optdepends=('ydotool: anti-AFK for normal (visible) windows'
+            'kwin: window layouts (KDE Plasma)')
+makedepends=('git' 'python-build' 'python-installer' 'python-setuptools' 'python-wheel')
+provides=('cellar')
+conflicts=('cellar')
+source=("git+$url.git")
+sha256sums=('SKIP')
+
+pkgver() {
+    cd Cellar
+    printf "%s.r%s.g%s" "$(python -c 'import re;print(re.search(r"__version__ = \"(.+?)\"", open("cellar/__init__.py").read())[1])')" \
+        "$(git rev-list --count HEAD)" "$(git rev-parse --short HEAD)"
+}
+
+build() {
+    cd Cellar
+    python -m build --wheel --no-isolation
+}
+
+package() {
+    cd Cellar
+    python -m installer --destdir="$pkgdir" dist/*.whl
+    install -Dm644 data/cellar.svg "$pkgdir/usr/share/icons/hicolor/scalable/apps/cellar.svg"
+    install -Dm644 cellar/data/cellar.png "$pkgdir/usr/share/icons/hicolor/256x256/apps/cellar.png"
+    install -Dm644 packaging/cellar.desktop "$pkgdir/usr/share/applications/cellar.desktop"
+    install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+}

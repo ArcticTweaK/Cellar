@@ -9,7 +9,7 @@ import time
 from dataclasses import dataclass
 from typing import Callable, Dict, List, Optional
 
-from . import api, background, gfx, log, macros, paths, sober, store, util, webhook
+from . import api, background, gfx, log, macros, paths, robloxlog, sober, store, util, webhook
 from .models import Account, Instance, LaunchSpec
 
 LogF = Callable[[str], None]
@@ -39,6 +39,11 @@ class Launcher:
         self.lock = threading.RLock()
         self._breaker: Dict[str, _Breaker] = {}
         self._account_locks: Dict[str, threading.Lock] = {}
+        self.logs = robloxlog.Watcher()
+        self._pulse: Optional[threading.Thread] = None
+        # the UI sets this: notify(kind, instance, text) for desktop notifications (called on worker threads)
+        self.notify: Callable[[str, Instance, str], None] = lambda kind, inst, text: None
+        self.on_join: Callable[[Instance, int, str], None] = lambda inst, place_id, job: None   # UI: recent/history
 
     # ------------------------------------------------------------ bookkeeping
     def snapshot(self) -> List[Instance]:
@@ -101,20 +106,24 @@ class Launcher:
     # ------------------------------------------------------------ macros (background clients)
     def start_macro(self, inst: Instance, name: str, logf: LogF) -> bool:
         m = next((m for m in store.settings.macros if m.name == name), None)
-        who = inst.account.name
         if m is None:
-            logf(f"[{who}] no macro called '{name}'.")
+            logf(f"[{inst.account.name}] no macro called '{name}'.")
             return False
+        return self.start_macro_text(inst, m.name, m.text, m.loop, logf)
+
+    def start_macro_text(self, inst: Instance, name: str, text: str, loop: bool, logf: LogF) -> bool:
+        """Also used by the Macros page's Run once (the text as typed, saved or not)."""
+        who = inst.account.name
         if not inst.screen:
             logf(f"[{who}] macros need background mode (Edit account > Run in the background), then relaunch it.")
             return False
         self.stop_macro(inst)
         try:
-            inst.macro = macros.Runner(inst.screen, m.name, m.text, m.loop, logf, who).start()
+            inst.macro = macros.Runner(inst.screen, name, text, loop, logf, who).start()
         except ValueError as ex:
-            logf(f"[{who}] macro '{m.name}' has mistakes: {ex}")
+            logf(f"[{who}] macro '{name}' has mistakes: {ex}")
             return False
-        logf(f"[{who}] running macro '{m.name}'" + (" (loops until you stop it)." if m.loop else " (once)."))
+        logf(f"[{who}] running macro '{name}'" + (" (loops until you stop it)." if loop else " (once)."))
         return True
 
     @staticmethod
@@ -164,6 +173,9 @@ class Launcher:
     # ------------------------------------------------------------ stopping
     def stop_instance(self, inst: Instance, logf: Optional[LogF] = None) -> None:
         inst.user_closed = True
+        if inst.frozen and inst.pid:            # a frozen process cannot react to a polite "please quit"
+            inst.frozen = False
+            sober.freeze(inst.pid, False)
         n = sober.stop(inst.launch_pid, inst.tracker, unit=inst.unit)
         self._remove(inst)
         if logf and n:
@@ -365,6 +377,97 @@ class Launcher:
              (" on its invisible screen - right-click it > View screen." if screen else "."))
         return True
 
+    def freeze(self, inst: Instance, on: bool, logf: LogF) -> bool:
+        who = f"[{inst.account.name}]"
+        if not inst.pid:
+            logf(f"{who} its window is not up yet - try again in a moment.")
+            return False
+        if on and inst.macro:
+            self.stop_macro(inst)
+        err = sober.freeze(inst.pid, on)
+        if err:
+            logf(f"{who} could not {'freeze' if on else 'resume'} it: {err}")
+            return False
+        inst.frozen = on
+        inst.strikes = 0
+        if not on:
+            logf(f"{who} resumed.")
+        elif store.settings.freeze_keep_connected:
+            logf(f"{who} frozen - it wakes for a moment every {store.settings.freeze_wake_every_sec} s to stay "
+                 "connected, and uses almost no CPU otherwise.")
+            self._start_pulse()
+        else:
+            logf(f"{who} frozen solid - no CPU at all, but Roblox drops it from the server after a while.")
+        return True
+
+    def _start_pulse(self) -> None:
+        if self._pulse is None or not self._pulse.is_alive():
+            self._pulse = threading.Thread(target=self._pulse_loop, daemon=True, name="freeze pulse")
+            self._pulse.start()
+
+    def _pulse_loop(self) -> None:
+        """While any client is frozen with 'stay connected': thaw it briefly every few seconds. Awake, it sends the
+        game server its heartbeat and acks and works through what queued up; frozen again it takes no CPU. All
+        frozen clients wake together, so this costs one short burst per cycle."""
+        while True:
+            s = store.settings
+            time.sleep(max(3, s.freeze_wake_every_sec))
+            insts = [i for i in self.snapshot() if i.frozen and i.pid and not i.user_closed]
+            if not insts:
+                return
+            if not s.freeze_keep_connected:
+                continue
+            woke = [i for i in insts if not sober.freeze(i.pid, False)]
+            time.sleep(max(200, s.freeze_wake_ms) / 1000)
+            for i in woke:
+                if i.frozen:                    # still meant to be frozen (not resumed / stopped meanwhile)
+                    sober.freeze(i.pid, True)
+
+    # ------------------------------------------------------------ Roblox log (joins, kicks)
+    def log_tick(self, logf: LogF) -> None:
+        """Every few seconds on a worker: reads each client's Roblox log. Kicks and lost connections are
+        noticed within seconds (the presence watcher needs minutes) and can rejoin right away."""
+        alive = [i for i in self.alive_instances() if not i.user_closed]
+        items = {}
+        for i in alive:
+            app = sober.profile_app(i.account) if i.isolated else sober.main_app()
+            items[i.tracker] = (robloxlog.logs_folder(app), i.started)
+        events = self.logs.poll(items)
+        s = store.settings
+        for i in alive:
+            for ev in events.get(i.tracker, []):
+                who = f"[{i.account.name}]"
+                if ev.kind == "joined":
+                    first = not i.place_id
+                    if ev.job_id != i.job_id:
+                        self.on_join(i, ev.place_id, ev.job_id)
+                    i.place_id, i.job_id = ev.place_id, ev.job_id
+                    if not first:
+                        logf(f"{who} joined another server (place {ev.place_id}).")
+                elif ev.kind == "disconnected":
+                    text = f"{who} {ev.describe()}."
+                    self.notify("kick", i, f"{i.account.name}: {ev.describe()}")
+                    if s.webhook_crash:
+                        webhook.send("Disconnected", f"{i.account.name} — {ev.describe()}.", webhook.RED)
+                    if not s.rejoin_on_kick:
+                        logf(text + " (Turn on 'Rejoin when kicked' in Settings to bring it back by itself.)")
+                        continue
+                    if not self.breaker_allows(i.account):
+                        logf(text + " The crash breaker paused rejoining it - launch it yourself to try again.")
+                        continue
+                    # lost connection: the same server; kicked: the server may refuse it, so the original target
+                    same = ev.reason in (0, 277, 279) and ev.job_id and ev.place_id
+                    spec = (LaunchSpec(kind="Job", place_id=ev.place_id, job_id=ev.job_id) if same
+                            else (i.spec if i.spec and (i.spec.place_id or i.spec.follow_user_id) else LaunchSpec()))
+                    logf(text + (" Rejoining the same server..." if same else " Rejoining..."))
+                    self.breaker_record(i.account)
+                    self.stop_instance(i)           # user_closed: the watcher must not relaunch it a second time
+                    time.sleep(2)
+                    self.launch(i.account, spec, logf)
+                    if s.webhook_relaunch:
+                        webhook.send("Client rejoined", f"{i.account.name} rejoined after: {ev.describe()}.",
+                                     webhook.YELLOW)
+
     def apply_limits_all(self, logf: LogF) -> int:
         s = store.settings
         n = 0
@@ -376,13 +479,37 @@ class Launcher:
         return n
 
     # ------------------------------------------------------------ watcher
+    def low_ram_tick(self, logf: LogF) -> None:
+        """Setting low_ram_close_mb: when free RAM falls below it, the most recently started alt is closed (never
+        an account marked Full quality, i.e. your main) - before the kernel's OOM killer picks something itself."""
+        from .usage import mem_available
+        need = store.settings.low_ram_close_mb
+        free = mem_available()
+        if need <= 0 or not free or free >= need * 2**20:
+            return
+        alts = sorted((i for i in self.alive_instances() if not i.account.full_quality), key=lambda i: i.started)
+        if not alts:
+            return
+        i = alts[-1]
+        logf(f"[{i.account.name}] closed to free memory: only {free // 2**20} MB was free (the setting keeps "
+             f"{need} MB free).")
+        self.notify("crash", i, f"{i.account.name} was closed because memory ran low.")
+        self.stop_instance(i)
+
     def watcher_tick(self, logf: LogF, cookie_for_presence: Callable[[], Optional[str]]) -> None:
         s = store.settings
+        self.low_ram_tick(logf)
         procs = sober.scan()
         dead = [i for i in self.snapshot() if not i.user_closed and not self.is_alive(i, procs)]
-        if s.webhook_crash:
-            for d in dead:
-                webhook.send("Client closed", f"{d.account.name} — its Sober window disappeared unexpectedly.", webhook.RED)
+        for d in dead:
+            # A dead client stays in the list while the internet is down (relaunching needs it), so the watcher sees
+            # it again every tick: report it once.
+            if not d.reported:
+                d.reported = True
+                self.notify("crash", d, f"{d.account.name}'s Roblox window closed unexpectedly.")
+                if s.webhook_crash:
+                    webhook.send("Client closed", f"{d.account.name} — its Sober window disappeared unexpectedly.",
+                                 webhook.RED)
         if not s.auto_relaunch:
             for d in dead:
                 self._remove(d)
@@ -390,7 +517,8 @@ class Launcher:
 
         if s.watcher_use_presence:
             for i in self.snapshot():
-                if i.user_closed or i in dead or i.account.user_id <= 0 or time.time() - i.started < 150:
+                if (i.user_closed or i in dead or i.frozen or i.account.user_id <= 0
+                        or time.time() - i.started < 150):
                     continue
                 pr = api.presence(i.account.cookie, [i.account.user_id]).get(i.account.user_id)
                 if pr is None:
@@ -407,7 +535,10 @@ class Launcher:
         if not dead:
             return
         if not api.internet_ok():
-            logf("Watcher: no internet connection, will retry.")
+            if not all(d.offline_logged for d in dead):
+                logf("Watcher: no internet connection - closed clients are relaunched once it is back.")
+                for d in dead:
+                    d.offline_logged = True
             return
         for d in dead:
             self._remove(d)

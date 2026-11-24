@@ -14,7 +14,7 @@ from dataclasses import dataclass
 from typing import Dict, List, Optional
 
 from PySide6.QtCore import ClassInfo, QEventLoop, QObject, QTimer, Slot
-from PySide6.QtDBus import QDBusConnection, QDBusConnectionInterface, QDBusInterface, QDBusMessage
+from PySide6.QtDBus import QDBusConnection, QDBusInterface, QDBusMessage
 
 from . import log
 
@@ -70,6 +70,8 @@ class _Receiver(QObject):
 
 
 class KWin:
+    name = "KDE Plasma"
+
     def __init__(self):
         self.bus = QDBusConnection.sessionBus()
         self.receiver = _Receiver()

@@ -1,5 +1,6 @@
 """Threading glue and small widget helpers."""
 
+import weakref
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Callable, Optional
@@ -9,7 +10,7 @@ from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import (QCheckBox, QComboBox, QFormLayout, QGroupBox, QHBoxLayout, QLabel, QMessageBox,
                                QPushButton, QSizePolicy, QSpinBox, QVBoxLayout, QWidget)
 
-from .. import log
+from .. import log, theme
 
 _pool = ThreadPoolExecutor(max_workers=10, thread_name_prefix="cellar")
 
@@ -50,7 +51,7 @@ def bg(fn: Callable, *args, done: Callable = None, err: Callable = None) -> None
         except Exception as ex:
             log.error(getattr(fn, "__name__", "background task"), ex)
             if err:
-                ui(lambda: err(ex))
+                ui(lambda e=ex: err(e))     # bind it now: Python deletes `ex` when the except block ends
             return
         if done:
             ui(lambda: done(r))
@@ -66,16 +67,41 @@ def app_icon() -> QIcon:
 
 
 # ---------------------------------------------------------------- widgets
+_icon_buttons: list = []
+
+
+def _icon_token(primary: bool) -> str:
+    # filled accent buttons only exist in Cellar's own themes; System keeps the desktop's normal buttons
+    return "on_accent" if primary and theme.current().key != "system" else "text"
+
+
+def refresh_icons() -> None:
+    """After a theme change: buttons get their icon again in the new colours."""
+    alive = []
+    for ref, name, primary in _icon_buttons:
+        b = ref()
+        try:
+            if b is not None:
+                b.setIcon(theme.icon(name, _icon_token(primary)))
+                alive.append((ref, name, primary))
+        except RuntimeError:        # the Qt object is gone
+            pass
+    _icon_buttons[:] = alive
+
+
 def btn(text: str, slot=None, tip: str = "", icon: str = "", primary: bool = False) -> QPushButton:
     b = QPushButton(text)
-    if icon:
-        b.setIcon(QIcon.fromTheme(icon))
+    if icon and (theme._ICON_SRC / f"{icon}.svg").exists():
+        # only Cellar's own icon set: desktop icon themes mixed styles (and differ on every distro)
+        b.setIcon(theme.icon(icon, _icon_token(primary)))
+        _icon_buttons.append((weakref.ref(b), icon, primary))
     if slot:
         b.clicked.connect(lambda *_: slot())
     if tip:
         b.setToolTip(tip)
     if primary:
         b.setDefault(False)
+        b.setProperty("primary", True)
         f = b.font()
         f.setBold(True)
         b.setFont(f)
@@ -104,6 +130,7 @@ def spin(lo: int, hi: int, val: int, on_change=None, suffix: str = "", tip: str 
         s.setToolTip(tip)
     if on_change:
         s.valueChanged.connect(on_change)
+    theme.pad_spin(s)
     return s
 
 

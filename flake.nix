@@ -43,6 +43,7 @@
           pkgs.passt
           pkgs.sway
           pkgs.wayvnc
+          pkgs.ruff
         ];
         shellHook = ''echo "Run Cellar from source:  python -m cellar"'';
       };

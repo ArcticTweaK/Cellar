@@ -81,8 +81,13 @@ python3Packages.buildPythonApplication {
       desktopName = "Cellar";
       genericName = "Roblox account launcher";
       comment = "Run many Roblox accounts at once through Sober";
-      exec = "cellar";
+      exec = "cellar %u";
       icon = "cellar";
+      # only offered: Sober stays the default until "Open the website's Play button with Cellar" is turned on
+      mimeTypes = [
+        "x-scheme-handler/roblox-player"
+        "x-scheme-handler/roblox"
+      ];
       categories = [
         "Game"
         "Utility"

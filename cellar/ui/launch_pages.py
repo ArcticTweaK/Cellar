@@ -2,12 +2,13 @@
 
 import random
 
-from PySide6.QtCore import Qt
-from PySide6.QtGui import QGuiApplication
-from PySide6.QtWidgets import (QButtonGroup, QComboBox, QHBoxLayout, QLabel, QLineEdit, QRadioButton, QVBoxLayout,
+from PySide6.QtCore import QTimer
+from PySide6.QtGui import QCursor, QGuiApplication
+from PySide6.QtWidgets import (QButtonGroup, QComboBox, QDialog, QLabel, QLineEdit, QRadioButton, QVBoxLayout,
                                QWidget, QCheckBox)
 
-from .. import api, store, util
+from .. import api, store, theme, util
+from ..models import LaunchSpec
 from ..specs import LaunchForm
 from .common import bg, btn, chk, group, hint, row, spin
 from .dialogs import GamePicker, ServerPicker, ServerTable
@@ -21,6 +22,7 @@ class LaunchPage(QWidget):
         v = QVBoxLayout(self)
 
         self.sel = QLabel()
+        self.sel.setObjectName("selection")
         self.sel.setWordWrap(True)
         v.addWidget(self.sel)
 
@@ -72,9 +74,9 @@ class LaunchPage(QWidget):
         v.addWidget(g)
 
         g, f = group("Go")
-        self.b_launch = btn("Launch selected", self.mw.launch_selected, icon="media-playback-start", primary=True)
+        self.b_launch = btn("Launch selected", self.mw.launch_selected, icon="play", primary=True)
         self.b_all = btn("Launch all listed", self.mw.launch_all_listed, icon="media-seek-forward")
-        self.b_stop = btn("Stop", self.mw.stop_launch, icon="media-playback-stop")
+        self.b_stop = btn("Cancel", self.mw.stop_launch, tip="Stop a launch sequence that is still going")
         self.b_stop.setEnabled(False)
         f.addRow(row(self.b_launch, self.b_all, self.b_stop))
         f.addRow(hint("Each account runs in its own isolated Sober profile (see Settings). "
@@ -111,11 +113,12 @@ class LaunchPage(QWidget):
 
     def update_selection(self, sel):
         if not sel:
-            self.sel.setText("<span style='color:#d29922'>Selected accounts: none - click accounts in the list "
-                             "(Ctrl / Shift for several).</span>")
+            self.sel.setText(theme.span("warn", "●") + "&nbsp; No accounts selected - click accounts in the list "
+                             + theme.span("muted", "(Ctrl / Shift for several)"))
         else:
             names = ", ".join(a.name for a in sel[:4]) + (f" ... (+{len(sel) - 4})" if len(sel) > 4 else "")
-            self.sel.setText(f"<span style='color:#3fb950'>Selected accounts ({len(sel)}): {names}</span>")
+            self.sel.setText(theme.span("good", "●") + f"&nbsp; <b>{len(sel)} selected</b>"
+                             + theme.span("muted", f"&nbsp; {names}"))
 
     def refresh_recent(self):
         keep = self.place.currentText()
@@ -220,6 +223,7 @@ class ServersPage(QWidget):
         v.addWidget(hint("Browse the public servers of a game and put the selected accounts into the <b>same</b> server."))
         self.place = QLineEdit(store.settings.last_place_id)
         self.place.setPlaceholderText("Place ID or game link")
+        self.place.setMinimumWidth(320)
         self.place.returnPressed.connect(lambda: self.load(False))
         self.order = QComboBox()
         self.order.addItem("Most players first", False)
@@ -227,17 +231,31 @@ class ServersPage(QWidget):
         self.hide_full = QCheckBox("Hide full servers")
         self.hide_full.setChecked(True)
         self.hide_full.toggled.connect(lambda *_: self._show())
-        v.addWidget(row(QLabel("Game"), self.place, btn("Search game...", self.search_game, icon="edit-find")))
-        v.addWidget(row(self.order, btn("Load servers", lambda: self.load(False), icon="view-refresh"),
-                        btn("Load more", lambda: self.load(True)), self.hide_full))
+        v.addWidget(row(QLabel("Game"), self.place, btn("Search game...", self.search_game, icon="search")))
+        self.game_name = QLabel("")
+        self.game_name.setObjectName("page_sub")
+        v.addWidget(self.game_name)
+        self.auto = QCheckBox("Refresh every 30 s")
+        self.auto.toggled.connect(lambda on: self.timer.start(30000) if on else self.timer.stop())
+        self.timer = QTimer(self, timeout=lambda: self.isVisible() and self.load(False, quiet=True))
+        v.addWidget(row(self.order, btn("Load servers", lambda: self.load(False), icon="refresh-cw"),
+                        btn("Load more", lambda: self.load(True)), self.hide_full, self.auto))
+        v.addWidget(row(QLabel("Quick join:"),
+                        btn("Emptiest server", lambda: self.quick("empty"),
+                            tip="The server with the fewest players that still has room for everyone you send"),
+                        btn("Busy server with room for everyone", lambda: self.quick("busy"),
+                            tip="The fullest server that still has a free slot for each account you send")))
         self.table = ServerTable()
         self.table.doubleClicked.connect(lambda *_: self.join())
         v.addWidget(self.table, 1)
         self.status = QLabel("")
         v.addWidget(self.status)
-        v.addWidget(row(btn("Join with selected accounts", self.join, icon="media-playback-start", primary=True),
-                        btn("Use on Launch page", self.use_on_launch),
-                        btn("Copy Job ID", self.copy_job, icon="edit-copy")))
+        v.addWidget(row(btn("Join", self.join, icon="play", primary=True,
+                            tip="The selected accounts join this server (or pick who, when none is selected)"),
+                        btn("Use on Accounts page", self.use_on_launch),
+                        btn("Copy Job ID", self.copy_job),
+                        btn("History...", lambda: HistoryDialog(self.mw).exec(),
+                            tip="Servers your accounts joined - rejoin one")))
 
     def search_game(self):
         d = GamePicker(self, self.mw.any_cookie())
@@ -245,7 +263,7 @@ class ServersPage(QWidget):
             self.place.setText(str(d.result.place_id))
             self.load(False)
 
-    def load(self, more: bool):
+    def load(self, more: bool, quiet: bool = False, then=None):
         pid = util.parse_place_id(self.place.text())
         if pid <= 0:
             self.status.setText("Enter a Place ID or game link.")
@@ -253,7 +271,12 @@ class ServersPage(QWidget):
         if more and not self.cursor:
             self.status.setText("No more servers.")
             return
-        self.status.setText("Loading...")
+        if not quiet:
+            self.status.setText("Loading...")
+        if pid != getattr(self, "_named", 0):
+            self._named = pid
+            self.game_name.setText("")
+            bg(api.place_name, pid, done=lambda n: self.game_name.setText(n or ""))
 
         def done(sp):
             if sp.error:
@@ -262,20 +285,52 @@ class ServersPage(QWidget):
             self.cursor = sp.next
             self.all = (self.all if more else []) + sp.servers
             self._show()
+            if then:
+                then()
         bg(api.servers, pid, bool(self.order.currentData()), self.cursor if more else "", self.mw.any_cookie(), done=done)
+
+    def quick(self, mode: str):
+        """Picks a server for the accounts you send and joins it (loads the right list first)."""
+        want_asc = mode == "empty"
+        if bool(self.order.currentData()) != want_asc or not self.all:
+            self.order.setCurrentIndex(self.order.findData(want_asc))
+            return self.load(False, then=lambda: self.quick(mode))
+        n = max(1, len(self.mw.selected_accounts()))
+        fits = [x for x in self.all if x.max - x.playing >= n]
+        if not fits:
+            self.status.setText(f"No loaded server has {n} free slot(s) - press Load more.")
+            return
+        pick = min(fits, key=lambda x: x.playing) if mode == "empty" else max(fits, key=lambda x: x.playing)
+        self.status.setText(f"Picked a server with {pick.playing}/{pick.max} players.")
+        self._join_job(pick.id)
 
     def _show(self):
         shown = [s for s in self.all if not (self.hide_full.isChecked() and s.playing >= s.max)]
         self.table.fill(shown)
-        self.status.setText(f"{len(shown)} of {len(self.all)} server(s) shown" + ("  ·  more available" if self.cursor else ""))
+        if self.all and not shown:
+            self.status.setText(f"All {len(self.all)} loaded servers are full - press Load more, choose Fewest "
+                                "players first, or untick Hide full servers.")
+        else:
+            self.status.setText(f"{len(shown)} of {len(self.all)} server(s) shown"
+                                + ("  ·  more available" if self.cursor else ""))
 
     def join(self):
         job = self.table.selected_job()
-        pid = util.parse_place_id(self.place.text())
-        if not job or pid <= 0:
-            self.mw.log("Load the servers and pick one first.")
+        if not job:
+            self.status.setText("Load the servers and pick one first.")
             return
-        self.mw.join_server(pid, job)
+        self._join_job(job)
+
+    def _join_job(self, job: str):
+        from .home_page import play_menu
+        pid = util.parse_place_id(self.place.text())
+        if pid <= 0:
+            return
+        spec = LaunchSpec(kind="Job", place_id=pid, job_id=job)
+        if self.mw.selected_accounts():
+            self.mw.join_server(pid, job)
+        else:                                   # nobody selected: ask who should go
+            play_menu(self.mw, self, spec, "that server").exec(QCursor.pos())
 
     def use_on_launch(self):
         job = self.table.selected_job()
@@ -292,3 +347,66 @@ class ServersPage(QWidget):
         if job:
             QGuiApplication.clipboard().setText(job)
             self.mw.log("Job ID copied.")
+
+
+class HistoryDialog(QDialog):
+    """Join history: every server an account entered (read from its Roblox log). Rejoin any of them."""
+
+    def __init__(self, mw):
+        super().__init__(mw)
+        import time as _t
+        from PySide6.QtWidgets import QAbstractItemView, QHeaderView, QTableWidget, QTableWidgetItem
+        self.mw = mw
+        self.setWindowTitle("Join history")
+        self.resize(760, 520)
+        v = QVBoxLayout(self)
+        v.addWidget(hint("Every server your accounts joined while Cellar ran (newest first). Double-click or "
+                         "<b>Rejoin</b> to put accounts back into that exact server."))
+        self.table = QTableWidget(0, 4)
+        self.table.setHorizontalHeaderLabels(["When", "Account", "Game", "Server"])
+        self.table.horizontalHeader().setSectionResizeMode(2, QHeaderView.Stretch)
+        self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.table.setSelectionMode(QAbstractItemView.SingleSelection)
+        self.table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self.table.verticalHeader().hide()
+        names = {e.place_id: e.name for e in store.settings.recent if e.name}
+        recs = store.settings.history
+        self.table.setRowCount(len(recs))
+        for r, h in enumerate(recs):
+            when = _t.strftime("%a %d %b  %H:%M", _t.localtime(h.ts))
+            for c, text in enumerate((when, h.account, names.get(h.place_id) or str(h.place_id), h.job_id[:8] + "…")):
+                it = QTableWidgetItem(text)
+                if c == 3:
+                    it.setToolTip(h.job_id)
+                self.table.setItem(r, c, it)
+        self.table.resizeColumnsToContents()
+        self.table.horizontalHeader().setSectionResizeMode(2, QHeaderView.Stretch)
+        self.table.doubleClicked.connect(lambda *_: self.rejoin())
+        v.addWidget(self.table, 1)
+        if not recs:
+            v.addWidget(hint("Nothing yet - joins are recorded from now on."))
+        self.rejoin_btn = btn("Rejoin...", self.rejoin, primary=True)
+        v.addWidget(row(self.rejoin_btn, btn("Copy Job ID", self.copy), btn("Clear history", self.clear),
+                        btn("Close", self.reject)))
+
+    def _rec(self):
+        r = self.table.currentRow()
+        return store.settings.history[r] if 0 <= r < len(store.settings.history) else None
+
+    def rejoin(self):
+        from .home_page import play_menu
+        h = self._rec()
+        if h:
+            spec = LaunchSpec(kind="Job", place_id=h.place_id, job_id=h.job_id)
+            play_menu(self.mw, self, spec, "that server").exec(self.rejoin_btn.mapToGlobal(
+                self.rejoin_btn.rect().bottomLeft()))
+
+    def copy(self):
+        h = self._rec()
+        if h:
+            QGuiApplication.clipboard().setText(h.job_id)
+
+    def clear(self):
+        store.settings.history.clear()
+        store.save_settings()
+        self.table.setRowCount(0)

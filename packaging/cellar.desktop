@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=Cellar
+GenericName=Roblox account launcher
+Comment=Run many Roblox accounts at once through Sober
+Exec=cellar %u
+Icon=cellar
+Terminal=false
+Categories=Game;Utility;
+Keywords=roblox;sober;alts;accounts;multi;instance;macro;
+StartupWMClass=cellar
+MimeType=x-scheme-handler/roblox-player;x-scheme-handler/roblox;

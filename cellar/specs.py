@@ -87,8 +87,10 @@ def resolve_form(f: LaunchForm, first: Account, logf: Callable[[str], None]) -> 
     return LaunchSpec(kind="Follow", follow_user_id=u.id, follow_name=u.name)
 
 
-def resolve_saved_share(a: Account, per: LaunchSpec, logf: Callable[[str], None]) -> bool:
-    """Resolves an account's saved share link with that account's login; rewrites it to the old form."""
+def resolve_saved_share(a: Account, per: LaunchSpec, logf: Callable[[str], None], save: bool = True) -> bool:
+    """Resolves a share link with that account's login. save=True (the account's own saved link): also rewrites
+    the saved link to the old form, so later launches skip this step. A one-off launch (Home, a game page) must
+    not touch what the account has saved."""
     logf(f"{a.name}: resolving its private server link...")
     r = api.resolve_share(per.share_code, a.cookie)
     if r is None or r.place_id <= 0 or not r.link_code:
@@ -96,6 +98,8 @@ def resolve_saved_share(a: Account, per: LaunchSpec, logf: Callable[[str], None]
              "(the account must own this server or be invited to it).")
         return False
     per.kind, per.place_id, per.link_code, per.share_code = "Private", r.place_id, r.link_code, ""
+    if not save:
+        return True
     a.game_link = f"https://www.roblox.com/games/{r.place_id}?privateServerLinkCode={r.link_code}"
     a.saved_place_id = str(r.place_id)
     store.save_accounts()

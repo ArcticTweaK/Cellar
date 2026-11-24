@@ -1,8 +1,9 @@
 """Friends tab: an account's friends, who is in which game, and join them with your selected accounts."""
 
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import (QAbstractItemView, QCheckBox, QComboBox, QHBoxLayout, QHeaderView, QLabel, QPushButton,
-                               QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget)
+from PySide6.QtGui import QGuiApplication
+from PySide6.QtWidgets import (QAbstractItemView, QCheckBox, QComboBox, QHBoxLayout, QHeaderView, QLabel, QMenu,
+                               QPushButton, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget)
 
 from .. import api, store
 from ..models import LaunchSpec
@@ -19,7 +20,7 @@ class FriendsPage(QWidget):
         self.friends = []
         v = QVBoxLayout(self)
         v.addWidget(hint("Pick an account to see its friends and where they are. <b>Join</b> sends the accounts "
-                         "selected on the left into that friend's server (Roblox's own 'join friend' rules apply)."))
+                         "selected on the Accounts page into that friend's server (Roblox's own 'join friend' rules apply)."))
         top = QHBoxLayout()
         top.addWidget(QLabel("Friends of"))
         self.acc = QComboBox()
@@ -42,6 +43,8 @@ class FriendsPage(QWidget):
         self.table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self.table.verticalHeader().hide()
         self.table.doubleClicked.connect(lambda _: self.join())
+        self.table.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.table.customContextMenuRequested.connect(self._menu)
         v.addWidget(self.table, 1)
         row = QHBoxLayout()
         self.status = QLabel("")
@@ -98,16 +101,37 @@ class FriendsPage(QWidget):
         ingame = sum(1 for f in self.friends if f.presence and f.presence.type == 2)
         self.status.setText(f"{len(self.friends)} friends - {online} online, {ingame} in a game.")
 
-    def join(self):
+    def _menu(self, pos):
+        r = self.table.rowAt(pos.y())
+        if r < 0:
+            return
+        self.table.selectRow(r)
+        m = QMenu(self)
+        sel = self.mw.selected_accounts()
+        a = m.addAction(f"Join with the {len(sel)} selected account(s)" if sel else "Join with selected accounts",
+                        self.join)
+        a.setEnabled(bool(sel))
+        jm = m.addMenu("Join with...")
+        for acc in store.accounts:
+            jm.addAction(acc.name, lambda acc=acc: self.join([acc]))
+        for g in sorted({x.group for x in store.accounts if x.group}):
+            accs = [x for x in store.accounts if x.group == g]
+            jm.addAction(f"Group '{g}' ({len(accs)})", lambda accs=accs: self.join(accs))
+        m.addSeparator()
+        name = self.table.item(r, 0).text()
+        m.addAction("Copy username", lambda: QGuiApplication.clipboard().setText(name.split("@")[-1].rstrip(")")))
+        m.exec(self.table.viewport().mapToGlobal(pos))
+
+    def join(self, accs=None):
         r = self.table.currentRow()
         if r < 0:
             self.status.setText("Pick a friend first.")
             return
         it = self.table.item(r, 0)
         uid = it.data(Qt.UserRole)
-        sel = self.mw.selected_accounts()
+        sel = accs or self.mw.selected_accounts()
         if not sel:
-            self.mw.log("Select the accounts that should join (in the list on the left) first.")
+            self.mw.log("Select the accounts that should join (Accounts page) first.")
             return
         self.mw.start_launch(sel, LaunchSpec(kind="Follow", follow_user_id=int(uid), follow_name=it.text()),
                              allow_saved=False)

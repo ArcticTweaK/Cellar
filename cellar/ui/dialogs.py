@@ -2,15 +2,15 @@
 
 from typing import List, Optional
 
-from PySide6.QtCore import Qt
-from PySide6.QtGui import QFontDatabase, QGuiApplication
+from PySide6.QtCore import Qt, QUrl
+from PySide6.QtGui import QDesktopServices, QFontDatabase, QGuiApplication
 from PySide6.QtWidgets import (QAbstractItemView, QComboBox, QDialog, QDialogButtonBox, QFormLayout, QHeaderView,
-                               QLabel, QLineEdit, QListWidget, QListWidgetItem, QPlainTextEdit, QPushButton,
-                               QSpinBox, QTableWidget, QTableWidgetItem, QVBoxLayout, QHBoxLayout, QCheckBox)
+                               QLabel, QLineEdit, QListWidget, QListWidgetItem, QPlainTextEdit, QPushButton, QTextBrowser,
+                               QTableWidget, QTableWidgetItem, QVBoxLayout, QHBoxLayout, QCheckBox)
 
-from .. import api, store
+from .. import api, store, theme
 from ..models import Account
-from .common import bg, hint
+from .common import bg, hint, spin
 
 
 class TextDialog(QDialog):
@@ -32,6 +32,29 @@ class TextDialog(QDialog):
 
     def set_text(self, t: str) -> None:
         self.edit.setPlainText(t)
+
+
+class ReleaseNotesDialog(QDialog):
+    """Release notes (GitHub Markdown) for "New version" and "What's new"."""
+
+    def __init__(self, parent, title: str, notes: str, url: str, how: str = ""):
+        super().__init__(parent)
+        self.setWindowTitle(title)
+        self.resize(620, 520)
+        v = QVBoxLayout(self)
+        head = QLabel(f"<h2>{title}</h2>")
+        v.addWidget(head)
+        if how:
+            v.addWidget(hint(how))
+        b = QTextBrowser()
+        b.setOpenExternalLinks(True)
+        b.setMarkdown(notes or "_No notes for this release._")
+        v.addWidget(b, 1)
+        bb = QDialogButtonBox(QDialogButtonBox.Close)
+        page = bb.addButton("Open release page", QDialogButtonBox.ActionRole)
+        page.clicked.connect(lambda: QDesktopServices.openUrl(QUrl(url)))
+        bb.rejected.connect(self.reject)
+        v.addWidget(bb)
 
 
 class PasteDialog(QDialog):
@@ -70,7 +93,7 @@ class PasswordDialog(QDialog):
             self.p2.setEchoMode(QLineEdit.Password)
             f.addRow("Repeat", self.p2)
         self.err = QLabel("")
-        self.err.setStyleSheet("color: #f85149")
+        self.err.setStyleSheet(f"color: {theme.c('bad')}")
         f.addRow(self.err)
         bb = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
         bb.accepted.connect(self._ok)
@@ -115,10 +138,7 @@ class EditAccountDialog(QDialog):
         self.job = QLineEdit(a.saved_job_id)
         self.job.setPlaceholderText("Job ID of a server (optional)")
         f.addRow("Own server", self.job)
-        self.fps = QSpinBox()
-        self.fps.setRange(0, 1000)
-        self.fps.setValue(a.fps_cap)
-        self.fps.setSpecialValueText("use the global FPS cap")
+        self.fps = spin(0, 1000, a.fps_cap, special="use the global FPS cap")
         f.addRow("FPS cap", self.fps)
         self.full = QCheckBox("Full quality - this is my main")
         self.full.setChecked(a.full_quality)
@@ -192,10 +212,27 @@ class BulkEditDialog(QDialog):
         self.c_game, self.game = QCheckBox("Own game"), QLineEdit()
         self.game.setPlaceholderText("Place ID / link, empty = none")
         f.addRow(self.c_game, self.game)
-        self.c_fps, self.fps = QCheckBox("FPS cap"), QSpinBox()
-        self.fps.setRange(0, 1000)
-        self.fps.setSpecialValueText("use the global FPS cap")
+        self.c_fps, self.fps = QCheckBox("FPS cap"), spin(0, 1000, 0, special="use the global FPS cap")
         f.addRow(self.c_fps, self.fps)
+        self.c_bg, self.bg = QCheckBox("Background"), QComboBox()
+        self.bg.addItem("Run on an invisible screen", True)
+        self.bg.addItem("Normal window", False)
+        f.addRow(self.c_bg, self.bg)
+        self.c_full, self.full = QCheckBox("Quality"), QComboBox()
+        self.full.addItem("Alt settings (FPS cap + graphics preset)", False)
+        self.full.addItem("Full quality (like my main)", True)
+        f.addRow(self.c_full, self.full)
+        self.c_macro, self.macro = QCheckBox("Macro at launch"), QComboBox()
+        self.macro.addItem("(none)", "")
+        for m in store.settings.macros:
+            self.macro.addItem(m.name, m.name)
+        f.addRow(self.c_macro, self.macro)
+        # ticking happens by itself when a field is changed
+        self.group.currentTextChanged.connect(lambda *_: self.c_group.setChecked(True))
+        self.game.textChanged.connect(lambda *_: self.c_game.setChecked(True))
+        self.fps.valueChanged.connect(lambda *_: self.c_fps.setChecked(True))
+        for c, w in ((self.c_bg, self.bg), (self.c_full, self.full), (self.c_macro, self.macro)):
+            w.currentIndexChanged.connect(lambda *_, c=c: c.setChecked(True))
         bb = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
         bb.accepted.connect(self.accept)
         bb.rejected.connect(self.reject)
@@ -213,6 +250,12 @@ class BulkEditDialog(QDialog):
                 a.saved_job_id = ""
             if self.c_fps.isChecked():
                 a.fps_cap = self.fps.value()
+            if self.c_bg.isChecked():
+                a.background = bool(self.bg.currentData())
+            if self.c_full.isChecked():
+                a.full_quality = bool(self.full.currentData())
+            if self.c_macro.isChecked():
+                a.auto_macro = self.macro.currentData() or ""
 
 
 class GamePicker(QDialog):
@@ -363,3 +406,99 @@ class ServerPicker(QDialog):
         if j:
             self.result = j
             self.accept()
+
+
+class PlayLinkDialog(QDialog):
+    """A "Play" link from the website: join with Cellar accounts, or hand it to your normal Sober."""
+
+    def __init__(self, parent, spec, selected_ids):
+        super().__init__(parent)
+        self.setWindowTitle("Join from the website")
+        self.resize(480, 520)
+        v = QVBoxLayout(self)
+        self.title = QLabel("<h3>Roblox wants to start a game</h3>")
+        v.addWidget(self.title)
+        what = {"Game": "Any public server", "Job": "A specific server", "Private": "A private server",
+                "Follow": "Follow a player into their game", "Reserved": "A reserved server"}
+        v.addWidget(hint(what.get(spec.kind, "Roblox's home screen") if spec else "Roblox's home screen (no game in "
+                         "the link)"))
+        own = spec is not None and spec.kind != "Reserved"
+        self.use_sober = QCheckBox("Play in my normal Sober (as the account logged in on the website)")
+        self.use_sober.setChecked(not own)
+        v.addWidget(self.use_sober)
+        v.addWidget(QLabel("Or join with these Cellar accounts:"))
+        self.list = QListWidget()
+        for a in store.accounts:
+            it = QListWidgetItem(a.name)
+            it.setData(Qt.UserRole, a.id)
+            it.setFlags(it.flags() | Qt.ItemIsUserCheckable)
+            it.setCheckState(Qt.Checked if own and a.id in selected_ids else Qt.Unchecked)
+            self.list.addItem(it)
+        self.list.setEnabled(own)
+        v.addWidget(self.list, 1)
+        if not own:
+            v.addWidget(hint("Only the website's own account can open this link, so it goes to your normal Sober."))
+        self.use_sober.toggled.connect(lambda on: self.list.setEnabled(own and not on))
+        self.list.itemChanged.connect(lambda *_: self.use_sober.setChecked(False) if self.chosen() else None)
+        bb = QDialogButtonBox(QDialogButtonBox.Cancel)
+        go = bb.addButton("Join", QDialogButtonBox.AcceptRole)
+        go.setProperty("primary", True)
+        bb.accepted.connect(self.accept)
+        bb.rejected.connect(self.reject)
+        v.addWidget(bb)
+        if spec and spec.place_id:
+            bg(api.place_name, spec.place_id,
+               done=lambda n: n and self.title.setText(f"<h3>Roblox wants to start {n}</h3>"))
+
+    def chosen(self) -> List[Account]:
+        ids = {self.list.item(i).data(Qt.UserRole) for i in range(self.list.count())
+               if self.list.item(i).checkState() == Qt.Checked}
+        return [a for a in store.accounts if a.id in ids]
+
+
+class RestoreBackupDialog(QDialog):
+    """Pick one of the automatic backups of the accounts file (last 10) and see what is in it first."""
+
+    def __init__(self, parent):
+        super().__init__(parent)
+        import time as _t
+        self.setWindowTitle("Restore accounts from a backup")
+        self.resize(560, 460)
+        self.chosen: Optional[List[Account]] = None
+        v = QVBoxLayout(self)
+        v.addWidget(hint("Cellar keeps the last 10 versions of your accounts file. Pick one to see what is in it. "
+                         "Restoring replaces your account list; the current list is kept as a backup."))
+        self.files = QListWidget()
+        for f in store.backups():
+            it = QListWidgetItem(_t.strftime("%Y-%m-%d  %H:%M:%S", _t.localtime(f.stat().st_mtime)))
+            it.setData(Qt.UserRole, str(f))
+            self.files.addItem(it)
+        self.files.currentItemChanged.connect(self._show)
+        v.addWidget(self.files, 1)
+        self.preview = QLabel()
+        self.preview.setWordWrap(True)
+        v.addWidget(self.preview)
+        bb = QDialogButtonBox(QDialogButtonBox.Cancel)
+        self.go = bb.addButton("Restore this backup", QDialogButtonBox.AcceptRole)
+        self.go.setEnabled(False)
+        bb.accepted.connect(self.accept)
+        bb.rejected.connect(self.reject)
+        v.addWidget(bb)
+        if not self.files.count():
+            self.preview.setText("No backups yet - Cellar makes one every time it opens your accounts.")
+
+    def _show(self, it, _prev=None):
+        from pathlib import Path
+        self.chosen = None
+        self.go.setEnabled(False)
+        if it is None:
+            return
+        accs, err = store.read_backup(Path(it.data(Qt.UserRole)))
+        if accs is None:
+            self.preview.setText(theme.span("bad", "Can't open this one: " + err))
+            return
+        self.chosen = accs
+        names = ", ".join(a.name for a in sorted(accs, key=lambda a: a.order)[:12])
+        more = f" and {len(accs) - 12} more" if len(accs) > 12 else ""
+        self.preview.setText(f"<b>{len(accs)} account(s):</b> {names}{more}")
+        self.go.setEnabled(True)

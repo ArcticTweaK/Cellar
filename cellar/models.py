@@ -91,6 +91,7 @@ class Account:
     last_used: float = 0.0      # unix time
     order: int = 0
     login_lost: bool = False
+    pinned: bool = False        # always at the top of the list
 
     @property
     def name(self) -> str:
@@ -163,6 +164,24 @@ class GameEntry:
     place_id: int = 0
     name: str = ""
     ts: float = 0.0
+
+
+@dataclass
+class PrivateServer:
+    """A private server link saved on a game's page (Home > game > Your private servers)."""
+    place_id: int = 0
+    name: str = ""
+    link: str = ""
+
+
+@dataclass
+class JoinRecord:
+    """One server an account joined (from its Roblox log) - Servers tab > History."""
+    ts: float = 0.0
+    account_id: str = ""
+    account: str = ""
+    place_id: int = 0
+    job_id: str = ""
 
 
 @dataclass
@@ -272,6 +291,13 @@ class Macro:
 @dataclass
 class AppSettings:
     first_run_done: bool = False
+    theme: str = "blossom"         # theme.THEMES key (Settings > Appearance)
+    ui_scale: str = "auto"          # auto | 90 | 100 | 115 | 130 | 150 (% - Qt scale factor, applied at start)
+    auto_scale: float = 1.0         # what "auto" uses: picked from the screen size at the previous start
+    home_account: str = ""          # account id whose friends / favourites the Home tab shows ("" = your main)
+    check_updates: bool = True      # ask GitHub for a newer release, at most once a day
+    last_update_check: float = 0.0
+    last_seen_version: str = ""     # shows "What's new" once after an update
     multi_instance: bool = True     # True = isolated Sober profile per account (pasta); False = one Sober at a time
     launch_delay_sec: int = 8
     auto_close_last: bool = True
@@ -307,6 +333,8 @@ class AppSettings:
     use_saved_per_account: bool = True
     groups: List[str] = field(default_factory=list)
     recent: List[GameEntry] = field(default_factory=list)
+    history: List[JoinRecord] = field(default_factory=list)     # newest first, last 300
+    private_servers: List[PrivateServer] = field(default_factory=list)
     layout: LayoutSettings = field(default_factory=LayoutSettings)
     presets: List[Preset] = field(default_factory=list)
     macros: List[Macro] = field(default_factory=lambda: [Macro(
@@ -318,9 +346,27 @@ class AppSettings:
     check_logins_at_startup: bool = True
     start_minimized_to_tray: bool = False
     close_to_tray: bool = True
+    ui_tab: int = 0                 # remembered: last tab, account list sort and column widths
+    ui_sort: str = "Manual"
+    accounts_view: str = "cards"    # Accounts page: cards | table
+    ui_header: str = ""             # QHeaderView.saveState(), base64
     win_w: int = 1360
     win_h: int = 820
     split: List[int] = field(default_factory=list)
+    min_free_ram_mb: int = 0        # before each launch, wait (up to 3 min) while less RAM than this is free
+    low_ram_close_mb: int = 0       # watcher: free RAM below this -> close the newest alt (not "full quality")
+    # Freeze: wake the alt for a moment every few seconds so it keeps answering the game server (a client that
+    # stays frozen is dropped as "lost connection"). Off = frozen solid (0% CPU, but kicked after a while).
+    freeze_keep_connected: bool = True
+    freeze_wake_every_sec: int = 10
+    freeze_wake_ms: int = 1500
+    rejoin_on_kick: bool = False    # kicked / disconnected (seen in the Roblox log) -> relaunch right away
+    notify: bool = True             # desktop notifications (through the tray icon)
+    notify_kick: bool = True
+    notify_crash: bool = True
+    notify_launch_done: bool = False
+    notify_login_lost: bool = True
+    notify_friends: bool = False    # a friend of the Home account comes online / starts a game (checked every minute)
     webhook: bool = False
     webhook_url: str = ""
     webhook_crash: bool = True
@@ -343,5 +389,10 @@ class Instance:
     isolated: bool = True
     user_closed: bool = False
     strikes: int = 0
+    reported: bool = False      # "Client closed" webhook already sent (the watcher may see it dead many times)
+    offline_logged: bool = False
+    frozen: bool = False        # paused with the cgroup freezer (0% CPU) - see sober.freeze
+    place_id: int = 0           # the server it is in now, from the Roblox log (robloxlog)
+    job_id: str = ""
     screen: Any = None          # background.Screen when it runs on an invisible screen
     macro: Any = None           # macros.Runner while a macro runs on it

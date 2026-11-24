@@ -1,31 +1,26 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256">
-  <!-- Cellar: a cellar's arched doorway with a rack of bottles inside; one glows (an account at work). -->
+  <!-- Cellar: a vault of arches going down into the cellar, a lit doorway at the end.
+       The layers are the accounts; colours match the default Blossom theme (accent #f0679a). -->
   <defs>
     <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="#3d1622"/>
-      <stop offset="1" stop-color="#1b0b11"/>
+      <stop offset="0" stop-color="#2d2532"/>
+      <stop offset="1" stop-color="#131116"/>
     </linearGradient>
-    <radialGradient id="wine" cx="0.42" cy="0.38" r="0.62">
-      <stop offset="0" stop-color="#ff8a9b"/>
-      <stop offset="0.55" stop-color="#d4374f"/>
-      <stop offset="1" stop-color="#9e1f35"/>
+    <linearGradient id="door" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffc2d8"/>
+      <stop offset="1" stop-color="#f0679a"/>
+    </linearGradient>
+    <!-- the glow is the fill of the rounded square itself, so it never spills past the edge -->
+    <radialGradient id="halo" cx="128" cy="200" r="80" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#f0679a" stop-opacity="0.42"/>
+      <stop offset="1" stop-color="#f0679a" stop-opacity="0"/>
     </radialGradient>
   </defs>
-  <rect x="8" y="8" width="240" height="240" rx="52" fill="url(#bg)"/>
-  <path d="M40 226 V118 A88 88 0 0 1 216 118 V226" fill="#12080c" stroke="#c89b5e" stroke-width="11"
-        stroke-linejoin="round"/>
-  <g fill="#2f6342">
-    <circle cx="84" cy="108" r="19"/><circle cx="128" cy="108" r="19"/><circle cx="172" cy="108" r="19"/>
-    <circle cx="84" cy="152" r="19"/><circle cx="172" cy="152" r="19"/>
-    <circle cx="84" cy="196" r="19"/><circle cx="128" cy="196" r="19"/><circle cx="172" cy="196" r="19"/>
-    <circle cx="128" cy="64" r="19"/>
-  </g>
-  <g fill="#173322">
-    <circle cx="84" cy="108" r="8"/><circle cx="128" cy="108" r="8"/><circle cx="172" cy="108" r="8"/>
-    <circle cx="84" cy="152" r="8"/><circle cx="172" cy="152" r="8"/>
-    <circle cx="84" cy="196" r="8"/><circle cx="128" cy="196" r="8"/><circle cx="172" cy="196" r="8"/>
-    <circle cx="128" cy="64" r="8"/>
-  </g>
-  <circle cx="128" cy="152" r="19" fill="url(#wine)"/>
-  <circle cx="128" cy="152" r="8" fill="#7d1426"/>
+  <rect x="8" y="8" width="240" height="240" rx="56" fill="url(#bg)"/>
+  <rect x="8" y="8" width="240" height="240" rx="56" fill="url(#halo)"/>
+  <rect x="8.5" y="8.5" width="239" height="239" rx="55.5" fill="none" stroke="#fff" stroke-opacity="0.09"/>
+  <path d="M48 204 V128 A80 80 0 0 1 208 128 V204" fill="none" stroke="#6e3653" stroke-width="22"/>
+  <path d="M82 204 V148 A46 46 0 0 1 174 148 V204" fill="none" stroke="#b84e7f" stroke-width="22"/>
+  <path d="M106 204 V166 A22 22 0 0 1 150 166 V204 Z" fill="url(#door)"/>
+  <rect x="44" y="204" width="168" height="5" rx="2.5" fill="#f0679a" fill-opacity="0.55"/>
 </svg>

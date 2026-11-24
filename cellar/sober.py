@@ -96,8 +96,17 @@ def which(name: str) -> Optional[str]:
 
 
 def sober_installed() -> bool:
+    """Called from the UI thread every 2 s, so it must stay instant: look for Flatpak's install folders first and
+    only ask `flatpak info` (slow, ~100 ms+) at most every 30 s when neither exists (custom installation)."""
     if _cache.get("sober"):
         return True
+    for base in (os.path.expanduser("~/.local/share/flatpak"), "/var/lib/flatpak"):
+        if os.path.isdir(os.path.join(base, "app", SOBER_ID, "current")):
+            _cache["sober"] = True
+            return True
+    if time.time() - _cache.get("sober_checked", 0) < 30:
+        return False
+    _cache["sober_checked"] = time.time()
     fp = which("flatpak")
     if not fp:
         return False
@@ -108,6 +117,19 @@ def sober_installed() -> bool:
     if ok:
         _cache["sober"] = True
     return ok
+
+
+def sober_update_available() -> bool:
+    """Asks Flathub (about 1 s, needs the network) whether a newer Sober is waiting."""
+    fp = which("flatpak")
+    if not fp:
+        return False
+    try:
+        out = subprocess.run([fp, "remote-ls", "--updates", "--app", "--columns=application"], capture_output=True,
+                             text=True, timeout=60).stdout
+        return SOBER_ID in out.split()
+    except Exception:
+        return False
 
 
 def sober_version() -> str:
@@ -335,14 +357,134 @@ def main_sober_settings() -> dict:
     return read_sober_config(main_app())
 
 
+def write_main_config(cfg: dict) -> None:
+    """My Sober tab: saves your normal Sober's config.json. Sober's own comment header is kept, unknown keys are
+    kept (cfg is the whole file), and the first save keeps the original as config.json.before-cellar."""
+    f = main_app() / "config" / "sober" / "config.json"
+    head = ""
+    try:
+        text = f.read_text(encoding="utf-8")
+        head = "".join(l + "\n" for l in text.splitlines() if l.lstrip().startswith("//"))
+        keep = f.with_name("config.json.before-cellar")
+        if not keep.exists():
+            shutil.copy2(f, keep)
+    except OSError:
+        pass
+    f.parent.mkdir(parents=True, exist_ok=True)
+    tmp = f.with_name("config.json.cellar-tmp")
+    tmp.write_text(head + json.dumps(cfg, indent=4) + "\n", encoding="utf-8")
+    os.replace(tmp, f)
+
+
+def dir_size(p: Path) -> int:
+    total = 0
+    for root, _, files in os.walk(p):
+        for n in files:
+            try:
+                total += os.lstat(os.path.join(root, n)).st_size
+            except OSError:
+                pass
+    return total
+
+
+# Repair tools (My Sober tab). Paths are relative to a Sober app folder (yours or an account profile's).
+CLEANABLE = {
+    "cache": ("Roblox's download cache", ["cache/sober"]),
+    "shaders": ("Shader caches", ["cache/mesa_shader_cache", "cache/nvidia/GLCache", "cache/radv_builtin_shaders"]),
+    "crashes": ("Crash dumps and old logs", ["data/sober/crashes", "data/sober/sober_logs"]),
+}
+
+
+def clean_size(app: Path, key: str) -> int:
+    return sum(dir_size(app / rel) for rel in CLEANABLE[key][1] if (app / rel).exists())
+
+
+def clean(app: Path, key: str) -> int:
+    """Empties those folders (keeps the folders themselves). Returns bytes freed."""
+    freed = 0
+    for rel in CLEANABLE[key][1]:
+        d = app / rel
+        if not d.is_dir():
+            continue
+        for child in d.iterdir():
+            freed += dir_size(child) if child.is_dir() and not child.is_symlink() else child.lstat().st_size
+            _rm(child)
+    return freed
+
+
+def account_apps() -> List[Path]:
+    """The Sober folders of every account profile (for cleaning them all at once)."""
+    if not paths.PROFILES_DIR.is_dir():
+        return []
+    return [d / ".var" / "app" / SOBER_ID for d in paths.PROFILES_DIR.iterdir()
+            if (d / ".var" / "app" / SOBER_ID).is_dir()]
+
+
 def main_cookie() -> Optional[str]:
     """The .ROBLOSECURITY cookie your normal Sober is logged in with (if stored in plain text)."""
     from .util import extract_cookies
     try:
-        found = extract_cookies((main_app() / "data" / "sober" / "cookies").read_text(errors="replace"))
+        found = extract_cookies(main_cookie_file().read_text(errors="replace"))
         return found[0] if found else None
     except OSError:
         return None
+
+
+def freeze(pid: int, on: bool) -> str:
+    """Freezes (or resumes) a Sober client: the kernel stops scheduling it, so it uses no CPU at all while its
+    memory stays. Done on Flatpak's own scope for that client (where Sober's processes live). Returns '' or why
+    not. Frozen for a long time, the game server drops the connection (Roblox shows a disconnect on resume)."""
+    from .usage import cgroup_of
+    cg = cgroup_of(pid)
+    if cg is None or not cg.name.endswith((".scope", ".service")):
+        return "its process group was not found"
+    sc = which("systemctl")
+    if sc:
+        r = subprocess.run([sc, "--user", "freeze" if on else "thaw", cg.name], capture_output=True, text=True,
+                           timeout=15)
+        if r.returncode == 0:
+            return ""
+    try:                            # older systemd: the cgroup's own switch (user-owned under user@.service)
+        (cg / "cgroup.freeze").write_text("1" if on else "0")
+        return ""
+    except OSError as ex:
+        return str(ex)
+
+
+def main_cookie_file() -> Path:
+    return main_app() / "data" / "sober" / "cookies"
+
+
+def main_sober_running() -> bool:
+    """True while your normal Sober runs (any Sober process whose HOME is not one of our account profiles)."""
+    prof = str(paths.PROFILES_DIR)
+    for p in scan():
+        if p.comm not in ("sober", "Main"):
+            continue
+        try:
+            with open(f"/proc/{p.pid}/environ", "rb") as f:
+                env = dict(kv.split(b"=", 1) for kv in f.read().split(b"\0") if b"=" in kv)
+        except OSError:
+            continue
+        if not env.get(b"HOME", b"").decode(errors="replace").startswith(prof):
+            return True
+    return False
+
+
+def set_main_cookie(cookie: str) -> None:
+    """Log your normal Sober into another account: its login lives in data/sober/cookies as one Cookie header
+    line ('name=value; name=value'). Only .ROBLOSECURITY is written - the other cookies there belong to the old
+    account's session. The very first switch keeps the original file as cookies.before-cellar."""
+    f = main_cookie_file()
+    f.parent.mkdir(parents=True, exist_ok=True)
+    keep = f.with_name("cookies.before-cellar")
+    if f.exists() and not keep.exists():
+        shutil.copy2(f, keep)
+    tmp = f.with_name("cookies.cellar-tmp")
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w") as out:
+        out.write(f".ROBLOSECURITY={cookie}")
+    os.replace(tmp, f)
 
 
 # ---------------------------------------------------------------- launching
