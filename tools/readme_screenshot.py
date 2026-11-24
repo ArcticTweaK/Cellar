@@ -3,8 +3,8 @@
     nix develop -c python tools/readme_screenshot.py [OUT.png] [theme]      (default: docs/screenshot.png blossom)
 
 Off-screen with throw-away folders, like tools/screenshot.py - your running Cellar and accounts are not touched.
-Game names / player counts come from Roblox's public games API (one request, no login); never put real account
-names in the README picture.
+Game names / player counts come from Roblox's public games API (one request, no login); only the author's public name;
+alts are altaccount1, altaccount2, ... in the README picture.
 """
 import os
 import shutil
@@ -46,8 +46,8 @@ for g in gl:
     games._uni[g.place_id] = g.universe_id
 store.settings.recent = [GameEntry(place_id=g.place_id, name=g.name, ts=time.time() - i) for i, g in enumerate(gl)]
 store.settings.last_place_id = str(gl[0].place_id)
-names = [("ArcticTweaK", "Main", "blue", True), ("BerryFarm_01", "Farm", "green", False), ("BerryFarm_02", "Farm", "green", False),
-         ("BerryFarm_03", "Farm", "green", False), ("PixelPilot07", "Trade", "pink", False), ("SnowyAltz", "Trade", "pink", False)]
+names = [("ArcticTweaK", "Main", "blue", True), ("altaccount1", "Farm", "green", False), ("altaccount2", "Farm", "green", False),
+         ("altaccount3", "Farm", "green", False), ("altaccount4", "Trade", "pink", False), ("altaccount5", "Trade", "pink", False)]
 store.accounts = []
 for i, (n, grp, col, main) in enumerate(names):
     a = Account(username=n, order=i, group=grp, color=col, full_quality=main, user_id=1000 + i)
@@ -82,12 +82,12 @@ def run():
     w.launch_page.set_place(gl[0].place_id)
     w.logview.clear()
     for line in ("18:02:11  Launching 4 account(s): Blox Fruits",
-                 "18:02:14  [BerryFarm_01] started on its invisible screen - right-click it > View screen.",
-                 "18:02:23  [BerryFarm_02] started on its invisible screen - right-click it > View screen.",
-                 "18:02:31  [BerryFarm_03] started on its invisible screen - right-click it > View screen.",
-                 "18:02:40  [PixelPilot07] started on its invisible screen - right-click it > View screen.",
+                 "18:02:14  [altaccount1] started on its invisible screen - right-click it > View screen.",
+                 "18:02:23  [altaccount2] started on its invisible screen - right-click it > View screen.",
+                 "18:02:31  [altaccount3] started on its invisible screen - right-click it > View screen.",
+                 "18:02:40  [altaccount4] started on its invisible screen - right-click it > View screen.",
                  "18:02:41  Launch sequence finished.",
-                 "18:03:05  [BerryFarm_01] running macro 'Berry farm' (loops until you stop it).",
+                 "18:03:05  [altaccount1] running macro 'Berry farm' (loops until you stop it).",
                  "18:31:52  Anti-AFK: poked 4 background account(s)."):
         w.logview.appendPlainText(line)
     for _ in range(8):

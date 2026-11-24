@@ -6,11 +6,11 @@
 
 **Run many Roblox accounts at once on Linux - each on its own invisible screen if you want.**
 
-[![Latest release](https://img.shields.io/github/v/release/ArcticTweaK/Cellar?style=flat-square&color=e2557f)][releases]
-[![License: GPL-3.0](https://img.shields.io/github/license/ArcticTweaK/Cellar?style=flat-square&color=6e7bf2)](LICENSE)
-[![Linux](https://img.shields.io/badge/platform-Linux-2b2d42?style=flat-square&logo=linux&logoColor=white)](#install)
-[![Built on Sober](https://img.shields.io/badge/built%20on-Sober-2b2d42?style=flat-square)](https://sober.vinegarhq.org)
-[![Discord](https://img.shields.io/badge/Discord-join%20the%20server-5865F2?style=flat-square&logo=discord&logoColor=white)][discord]
+[![Latest release](https://img.shields.io/github/v/release/ArcticTweaK/Cellar?style=for-the-badge&color=e2557f)][releases]
+[![License: GPL-3.0](https://img.shields.io/github/license/ArcticTweaK/Cellar?style=for-the-badge&color=6e7bf2)](LICENSE)
+[![Linux](https://img.shields.io/badge/platform-Linux-2b2d42?style=for-the-badge&logo=linux&logoColor=white)](#install)
+[![Built on Sober](https://img.shields.io/badge/built%20on-Sober-2b2d42?style=for-the-badge)](https://sober.vinegarhq.org)
+[![Discord](https://img.shields.io/badge/Discord-join%20the%20server-5865F2?style=for-the-badge&logo=discord&logoColor=white)][discord]
 
 [**Install**](#install) · [**Features**](#features) · [**Discord**][discord] · [**Documentation**](#documentation) · [**FAQ**](#faq)
 
