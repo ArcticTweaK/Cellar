@@ -189,30 +189,51 @@ class LaunchMixin:
     def run_sequence(self, accs: List[Account], spec: LaunchSpec, allow_saved: bool, cancel: threading.Event):
         """Worker thread."""
         s = store.settings
+        q = self.launch_page.queue
+        ui(lambda: q.start(accs, spec, allow_saved))
         self.log(f"Launching {len(accs)} account(s): {spec.describe()}")
         if spec.place_id:
             pid = spec.place_id
             ui(lambda: self.add_recent(pid))
+        failed = 0
         for i, a in enumerate(accs):
             if cancel.is_set():
                 break
+            ui(lambda a=a: q.set(a, "go"))
+            last = []                       # what the launcher said about this account: the reason if it fails
+
+            def logf(m, last=last):
+                last.append(m)
+                self.log(m)
             self.launcher.breaker_clear(a)
             own = specs.saved_spec(a) if allow_saved and s.use_saved_per_account else None
             per = (own or spec).copy()
             if per.kind == "Private" and per.share_code and not per.link_code:
-                if not specs.resolve_saved_share(a, per, self.log, save=own is not None):
+                if not specs.resolve_saved_share(a, per, logf, save=own is not None):
+                    failed += 1
+                    ui(lambda a=a: q.set(a, "fail", "could not open its private server link"))
                     continue
             if s.min_free_ram_mb > 0 and not self._wait_for_ram(a, s.min_free_ram_mb, cancel):
                 break
-            self.launcher.launch(a, per, self.log)
+            ok = self.launcher.launch(a, per, logf)
+            if not ok:
+                failed += 1
+            why = _reason(last[-1], a.name) if last and not ok else ""
+            ui(lambda a=a, ok=ok, why=why: q.set(a, "ok" if ok else "fail", why))
             ui(self.update_running)
             if i < len(accs) - 1 and not cancel.is_set():
                 cancel.wait(max(0, s.launch_delay_sec))
-        self.log("Launch cancelled." if cancel.is_set() else "Launch sequence finished.")
+        ui(lambda c=cancel.is_set(): q.finish(c))
+        self.log("Launch cancelled." if cancel.is_set() else
+                 "Launch sequence finished." + (f" {failed} account(s) failed - Retry failed on the Accounts page."
+                                                if failed else ""))
+        started = len(accs) - failed
+        text = (f"Launched {started} of {len(accs)} account(s)" if failed else f"Launched {len(accs)} account(s)") \
+            + f": {spec.describe()}."
         if not cancel.is_set():
-            ui(lambda: self.desktop_notify("done", f"Launched {len(accs)} account(s): {spec.describe()}."))
+            ui(lambda: self.desktop_notify("done" if not failed else "crash", text))
         if not cancel.is_set() and s.webhook_batch:
-            webhook.send("Launch finished", f"Started {len(accs)} account(s): {spec.describe()}", webhook.GREEN)
+            webhook.send("Launch finished", text, webhook.YELLOW if failed else webhook.GREEN)
 
     def _wait_for_ram(self, a: Account, need_mb: int, cancel: threading.Event) -> bool:
         """Worker thread. False = cancelled. Gives up waiting after 3 minutes and launches anyway."""
@@ -265,3 +286,9 @@ class LaunchMixin:
         else:
             self.log(f"Website link: {spec.describe()} with {len(accs)} account(s).")
             self.start_launch(accs, fixed=spec, allow_saved=False)
+
+
+def _reason(msg: str, name: str) -> str:
+    """'[alt2] could not get a login ticket: ...' -> 'could not get a login ticket: ...' (for the queue line)."""
+    msg = msg.replace(f"[{name}] ", "", 1).strip()
+    return msg[:1].lower() + msg[1:] if msg else ""

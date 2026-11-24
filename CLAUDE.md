@@ -66,6 +66,9 @@ cellar/
                   as crash-last.txt); scrub() removes cookies from anything copied into a bug report
   requirements.py system checks (Sober, pasta, sway/wayvnc, ydotool, KWin) + distro install commands (setup + System check)
   updates.py      GitHub releases check (once a day, opt-out), release notes for "What's new", how_to_update()
+  audio.py        per-account sound: pw-dump streams -> pid (pipewire.sec.pid) -> cgroup = the instance; wpctl
+                  set-mute / set-volume. LiveMixin.audio_tick every 5 s; Account.volume (-1 = Mute alts decides)
+  schedule.py     scheduled presets: due() fires starts / stops once a day within a 15 min grace (overnight stops)
   profiles.py     profile page data + full-body avatar / badge icon cache
   games.py        Home tab data: Roblox discover sorts, search, favourites (+ set), details (fill), place->universe
                   (disk cache), game icons + friend avatars cached in ~/.cache/cellar (blocking: use bg)

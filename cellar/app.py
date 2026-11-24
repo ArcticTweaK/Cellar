@@ -137,6 +137,7 @@ def main(argv=None) -> int:
         store.settings.auto_scale = auto_scale_for(int(scr.geometry().width() * own))
         store.save_settings()
     from . import theme
+    theme.set_accent(store.settings.accent)
     theme.apply(store.settings.theme)
     if not _unlock():
         return 0

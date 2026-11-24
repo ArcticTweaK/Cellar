@@ -146,6 +146,17 @@ class EditAccountDialog(QDialog):
                              "this account runs with Roblox's own graphics and your normal Sober's FPS cap,\n"
                              "unless you give it its own FPS cap above.")
         f.addRow("", self.full)
+        from .. import gfx
+        self.gfx = QComboBox()
+        self.gfx.addItem("Default (Performance page, or full quality for your main)", "")
+        for k in gfx.PRESETS:
+            if k != "Custom":
+                self.gfx.addItem(gfx.PRESET_LABELS[k], k)
+        self.gfx.setCurrentIndex(max(0, self.gfx.findData(a.gfx_preset)))
+        f.addRow("Graphics", self.gfx)
+        self.volume = spin(-1, 100, a.volume, suffix=" %", special="default (Settings > Mute alts)",
+                           tip="This account's sound. 0 = muted. Default follows Settings > Mute alts.")
+        f.addRow("Volume", self.volume)
         self.bgmode = QCheckBox("Run in the background (its own invisible screen)")
         self.bgmode.setChecked(a.background)
         self.bgmode.setToolTip("Nothing shows on your desktop; see and control it with right-click > View screen.\n"
@@ -187,6 +198,8 @@ class EditAccountDialog(QDialog):
         a.saved_job_id = self.job.text().strip()
         a.fps_cap = self.fps.value()
         a.full_quality = self.full.isChecked()
+        a.volume = self.volume.value()
+        a.gfx_preset = self.gfx.currentData() or ""
         a.background = self.bgmode.isChecked()
         a.auto_macro = self.automacro.currentData() or ""
         a.description = self.desc.toPlainText().strip()

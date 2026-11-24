@@ -5,7 +5,7 @@ import time
 from typing import Optional
 
 from PySide6.QtCore import Qt, QTimer
-from PySide6.QtWidgets import (QAbstractItemView, QComboBox, QHeaderView, QInputDialog, QLineEdit, QTreeWidget,
+from PySide6.QtWidgets import (QDialog, QAbstractItemView, QComboBox, QHeaderView, QInputDialog, QLineEdit, QTreeWidget,
                                QTreeWidgetItem, QVBoxLayout, QWidget)
 
 from .. import sober, specs, store, util
@@ -44,6 +44,19 @@ class PresetsPage(QWidget):
                      btn("Add to app menu", self.add_shortcut, tip="A launcher entry that runs this preset")))
         v.addWidget(g, 1)
 
+        g, f = group("Schedule")
+        f.addRow(hint("Run a preset at a time of day, and stop its accounts later if you like (18:00 to 02:00 works "
+                      "too). Cellar has to be running - in the tray is enough (Settings > Start Cellar when I log in)."))
+        self.sched = QTreeWidget()
+        self.sched.setHeaderLabels(["On", "Preset", "Start", "Stop", "Days"])
+        self.sched.setRootIsDecorated(False)
+        self.sched.setMaximumHeight(140)
+        self.sched.itemChanged.connect(self._sched_toggled)
+        self.sched.itemDoubleClicked.connect(lambda *_: self._sched_edit())
+        f.addRow(self.sched)
+        f.addRow(row(btn("Add...", self._sched_add), btn("Edit...", self._sched_edit), btn("Remove", self._sched_remove)))
+        v.addWidget(g)
+
         g, f = group("Options")
         self.exact = chk("Rejoin the exact same servers (Job ID)", store.settings.preset_exact_servers, self._exact,
                          "Off = any server of the same game (old servers usually no longer exist).")
@@ -53,6 +66,49 @@ class PresetsPage(QWidget):
         f.addRow("Run at startup", self.startup)
         v.addWidget(g)
         self.refresh()
+        self._fill_sched()
+
+    # ------------------------------------------------------------ schedule
+    DAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+
+    def _fill_sched(self):
+        self.sched.blockSignals(True)
+        self.sched.clear()
+        for sc in store.settings.schedules:
+            days = "every day" if len(sc.days) == 7 else ", ".join(self.DAYS[d] for d in sorted(sc.days)) or "never"
+            it = QTreeWidgetItem(["", sc.preset, sc.start, sc.stop or "-", days])
+            it.setCheckState(0, Qt.Checked if sc.enabled else Qt.Unchecked)
+            it.setData(0, Qt.UserRole, sc)
+            self.sched.addTopLevelItem(it)
+        self.sched.blockSignals(False)
+
+    def _sched_toggled(self, it, col):
+        if col == 0:
+            it.data(0, Qt.UserRole).enabled = it.checkState(0) == Qt.Checked
+            store.save_settings()
+
+    def _sched_add(self):
+        from ..models import Schedule
+        if not store.settings.presets:
+            return self.mw.toast("Save a preset first - a schedule runs a preset.", "warn")
+        sc = Schedule(preset=(self.selected() or store.settings.presets[0]).name)
+        if ScheduleDialog(self, sc).exec():
+            store.settings.schedules.append(sc)
+            store.save_settings()
+            self._fill_sched()
+
+    def _sched_edit(self):
+        it = self.sched.currentItem()
+        if it and ScheduleDialog(self, it.data(0, Qt.UserRole)).exec():
+            store.save_settings()
+            self._fill_sched()
+
+    def _sched_remove(self):
+        it = self.sched.currentItem()
+        if it:
+            store.settings.schedules.remove(it.data(0, Qt.UserRole))
+            store.save_settings()
+            self._fill_sched()
 
     # ------------------------------------------------------------
     def _exact(self, v):
@@ -286,3 +342,49 @@ class PresetsPage(QWidget):
             mw.log(f"Preset '{p.name}': {len(saved)} window(s) moved to their saved place.")
         else:
             grid.arrange()
+
+
+class ScheduleDialog(QDialog):
+    def __init__(self, parent, sc):
+        super().__init__(parent)
+        from PySide6.QtCore import QTime
+        from PySide6.QtWidgets import QCheckBox, QDialogButtonBox, QFormLayout, QHBoxLayout, QTimeEdit
+        self.sc = sc
+        self.setWindowTitle("Schedule a preset")
+        f = QFormLayout(self)
+        self.preset = QComboBox()
+        for p in store.settings.presets:
+            self.preset.addItem(p.name)
+        self.preset.setCurrentText(sc.preset)
+        f.addRow("Run preset", self.preset)
+        self.start = QTimeEdit(QTime.fromString(sc.start, "HH:mm"))
+        self.start.setDisplayFormat("HH:mm")
+        f.addRow("At", self.start)
+        self.has_stop = QCheckBox("Stop its accounts at")
+        self.has_stop.setChecked(bool(sc.stop))
+        self.stop = QTimeEdit(QTime.fromString(sc.stop or "02:00", "HH:mm"))
+        self.stop.setDisplayFormat("HH:mm")
+        self.stop.setEnabled(bool(sc.stop))
+        self.has_stop.toggled.connect(self.stop.setEnabled)
+        f.addRow(self.has_stop, self.stop)
+        days = QHBoxLayout()
+        self.days = []
+        for i, d in enumerate(PresetsPage.DAYS):
+            c = QCheckBox(d)
+            c.setChecked(i in sc.days)
+            self.days.append(c)
+            days.addWidget(c)
+        f.addRow("On", days)
+        bb = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        bb.accepted.connect(self._ok)
+        bb.rejected.connect(self.reject)
+        f.addRow(bb)
+
+    def _ok(self):
+        sc = self.sc
+        sc.preset = self.preset.currentText()
+        sc.start = self.start.time().toString("HH:mm")
+        sc.stop = self.stop.time().toString("HH:mm") if self.has_stop.isChecked() else ""
+        sc.days = [i for i, c in enumerate(self.days) if c.isChecked()]
+        sc.last_start = sc.last_stop = ""
+        self.accept()

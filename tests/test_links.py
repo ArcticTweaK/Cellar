@@ -105,3 +105,27 @@ class ShareLinks(unittest.TestCase):
             self.assertTrue(specs.resolve_saved_share(a, per, lambda m: None, save=False))
         self.assertEqual((per.place_id, per.link_code, a.game_link),
                          (99, "L", "https://www.roblox.com/games/4242/mine"))
+
+
+class Schedules(unittest.TestCase):
+    def at(self, day, hhmm):
+        import time as t
+        # 2026-11-23 is a Monday (weekday 0)
+        return t.mktime(t.strptime(f"2026-11-{23 + day} {hhmm}", "%Y-%m-%d %H:%M"))
+
+    def test_start_once_a_day_within_grace(self):
+        from cellar.models import Schedule
+        from cellar.schedule import due
+        s = Schedule(preset="Farm", start="18:00")
+        self.assertEqual(due([s], self.at(0, "17:59")), [])
+        self.assertEqual([k for _, k in due([s], self.at(0, "18:03"))], ["start"])
+        self.assertEqual(due([s], self.at(0, "18:05")), [])           # already ran today
+        self.assertEqual(due([s], self.at(1, "19:00")), [])           # far too late: missed, not run at 19:00
+
+    def test_overnight_stop_and_days(self):
+        from cellar.models import Schedule
+        from cellar.schedule import due
+        s = Schedule(preset="Farm", start="18:00", stop="02:00", days=[0])   # Mondays only
+        self.assertEqual([k for _, k in due([s], self.at(0, "18:00"))], ["start"])
+        self.assertEqual([k for _, k in due([s], self.at(1, "02:01"))], ["stop"])   # Tuesday night = Monday's run
+        self.assertEqual(due([s], self.at(1, "18:00")), [])                          # not on Tuesdays

@@ -51,6 +51,8 @@ many as you want at the same time, and let them farm in the background while you
   (Settings > Appearance). It switches right away.
 - **Moving PCs.** Export your accounts to a password-protected file and import them on the new PC. Every server
   your accounts joined is kept in a history you can rejoin from.
+- **Runs itself.** A launch shows ✓ / ✗ per account with the reason and Retry failed; presets can start and stop
+  on a schedule (18:00 to 02:00); alts can be muted (or each account given its own volume).
 - **Easy start.** A short setup on first start checks your system and shows the exact install command for
   anything missing. Cellar tells you when a new version is out (once a day from GitHub; can be turned off).
 - **The rest:** window layouts (KDE Plasma, Hyprland, Sway), anti-AFK, presets, per-account FPS/graphics, a RAM limit per alt,

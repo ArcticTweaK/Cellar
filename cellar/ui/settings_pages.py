@@ -189,6 +189,14 @@ class PerfPage(QWidget, _Bound):
                          "PC: an alt in a game takes 0.82 CPU cores at 240 FPS with Roblox's default graphics, and "
                          "0.17 at 30 FPS with the Lowest preset. About 1 GB of RAM each either way, so RAM sets "
                          "how many alts fit. OpenGL used about 35% less graphics memory per alt than Vulkan."))
+        g, f = group("Last hour - everything Cellar runs for your accounts")
+        from .widgets import UsageGraph
+        self.g_cpu = UsageGraph("CPU", lambda v: f"{v:.0f}%", floor=5)
+        self.g_mem = UsageGraph("Memory", lambda v: f"{v / 2**30:.1f} GB" if v >= 2**30 else f"{v / 2**20:.0f} MB",
+                                floor=2**29)
+        f.addRow(row(self.g_cpu, self.g_mem, stretch=False))
+        v.addWidget(g)
+
         g, f = group("Frame rate (alts)")
         f.addRow("FPS cap", self.bind(spin(0, 1000, S().fps_cap, special="same as my normal Sober",
                                            tip="Roblox's own 'Maximum frame rate' (FramerateCap), per profile. "
@@ -328,6 +336,11 @@ class SettingsPage(QWidget, _Bound):
         self.themes = ThemePicker(S().theme, self._pick_theme)
         f.addRow(self.themes)
         f.addRow(hint("Changes the whole app right away. <i>System</i> uses your desktop's own style and colours."))
+        self.accent_btn = btn("Pick a colour...", self._pick_accent)
+        self.accent_reset = btn("Theme's own", self._reset_accent)
+        self.accent_reset.setVisible(bool(S().accent))
+        f.addRow("Accent", row(self.accent_btn, self.accent_reset,
+                               hint("Your own colour for buttons, tabs and highlights, on any theme except System.")))
         auto = int(round(S().auto_scale * 100))
         self.size = combo([("auto", f"Auto ({auto}% on this screen)"), ("90", "90% - compact"), ("100", "100%"),
                            ("115", "115%"), ("130", "130% - large"), ("150", "150% - extra large")], S().ui_scale)
@@ -367,6 +380,13 @@ class SettingsPage(QWidget, _Bound):
                                S().refresh_cookie_on_launch), S, "refresh_cookie_on_launch"))
         self.plurl = self.bind(QLineEdit(S().place_launcher_url), S, "place_launcher_url")
         f.addRow("PlaceLauncher URL", self.plurl)
+        v.addWidget(g)
+
+        g, f = group("Sound")
+        f.addRow(self.bind(chk("Mute alts (accounts not marked Full quality)", S().mute_alts,
+                               tip="Only your main plays sound. Right-click an account > Mute / Unmute, or give it its "
+                                   "own volume in Edit account. Needs PipeWire (pw-dump, wpctl)."),
+                           S, "mute_alts", self.mw.audio_tick))
         v.addWidget(g)
 
         g, f = group("Watcher (auto-relaunch)")
@@ -455,6 +475,23 @@ class SettingsPage(QWidget, _Bound):
         self.update_status()
 
     # ------------------------------------------------------------
+    def _pick_accent(self):
+        from PySide6.QtGui import QColor
+        from PySide6.QtWidgets import QColorDialog
+        c = QColorDialog.getColor(QColor(S().accent or theme.c("accent")), self, "Accent colour")
+        if c.isValid():
+            self._set_accent(c.name())
+
+    def _reset_accent(self):
+        self._set_accent("")
+
+    def _set_accent(self, hex_colour: str):
+        S().accent = hex_colour
+        store.save_settings()
+        theme.set_accent(hex_colour)
+        self.mw.apply_theme(S().theme)
+        self.accent_reset.setVisible(bool(hex_colour))
+
     def _size_changed(self, *_):
         S().ui_scale = self.size.currentData()
         store.save_settings()
@@ -648,7 +685,9 @@ Pick a monitor, a grid mode and press <b>Arrange now</b>, or let new windows be 
 <p>FPS cap, graphics Fast Flags and Sober options are written into each account's profile before it launches.
 CPU priority and the RAM limit use the systemd scope every Sober window runs in. The Performance page also
 estimates how many more alts fit in your free memory, can wait before each launch until enough memory is free,
-and can close the newest alt when memory runs low (never one marked Full quality).</p>
+and can close the newest alt when memory runs low (never one marked Full quality). <b>Last hour</b> graphs the CPU
+and memory of everything Cellar runs (hover for exact values). Edit account &gt; <b>Graphics</b> gives one account
+its own graphics preset.</p>
 
 <h3>Themes</h3>
 <p>Settings &gt; Appearance: Blossom (pink), Midnight, Mint, Ember, Graphite, Daylight (light), or System to use
@@ -683,13 +722,23 @@ Ctrl+F = search, F5 = refresh status.</li>
 the Presets page) makes a launcher entry.</li>
 </ul>
 
+<h3>More</h3>
+<ul>
+<li>Launching shows a progress list on the Accounts page: ✓ started or ✗ failed with the reason, and
+<b>Retry failed</b>.</li>
+<li>Presets page &gt; <b>Schedule</b>: run a preset at a time of day and stop it later (Cellar must be running).</li>
+<li>Settings &gt; Sound &gt; <b>Mute alts</b>, right-click &gt; Mute / Unmute, or a volume per account (Edit
+account). Needs PipeWire.</li>
+<li>Activity: show only problems or one account, or search.</li>
+<li>Drop cookie files (or copied cookie text) onto the window to add accounts; drop an accounts .dat file to
+import it.</li>
+<li>Settings &gt; Appearance &gt; <b>Accent</b>: your own colour on any theme.</li>
+</ul>
+
 <h3>Problems?</h3>
 <p>Settings &gt; <b>System check</b> shows what is missing with the command to install it, and <b>Copy report</b>
 copies a bug report (your cookies are removed). <b>Run setup again</b> repeats the first-start setup. If Cellar
 ever closes by itself, the next start says so and keeps what it was doing in <tt>crash-last.txt</tt>.</p>
-
-<h3>Not available on Linux</h3>
-<p>RAM cleaner (Windows memory lists), renaming window titles, global hotkeys, Discord bot / screenshots.</p>
 
 <h3>Warning</h3>
 <p>Running several clients and automating input is against Roblox's rules and can get accounts moderated.

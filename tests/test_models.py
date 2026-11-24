@@ -23,3 +23,18 @@ class Models(unittest.TestCase):
         a = from_dict(Account, {"username": "x", "pinned": True})
         self.assertTrue(a.pinned)
         self.assertEqual(a.name, "x")
+
+
+class Graphics(unittest.TestCase):
+    def test_own_preset_beats_the_global_one(self):
+        from cellar import gfx
+        s = AppSettings()
+        gfx.apply_preset(s.gfx, "Lowest")
+        lowest, _ = gfx.final(s)
+        light, _ = gfx.final(s, preset="Light")
+        main, _ = gfx.final(s, full_quality=True)
+        self.assertIn("FFlagDebugSkyGray", lowest)
+        self.assertNotIn("FFlagDebugSkyGray", light)
+        self.assertEqual(light.get("DFIntTextureQualityOverride"), "2")
+        self.assertEqual(main, {})
+        self.assertEqual(s.gfx.preset, "Lowest")          # the global setting itself is untouched

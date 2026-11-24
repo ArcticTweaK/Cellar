@@ -51,13 +51,13 @@ the real running app was ~450 MB after hours.
 - [x] (replaced by the launcher layout) **L** Sidebar app layout: grouped pages (Play / Manage / Sober), full-width pages with titles, Accounts page
       (list + launch panel), live stats + "Playing as" in the sidebar, log -> Activity page + status line,
       one bundled icon set (Lucide)
-- [ ] **S** Custom accent colour picker (any theme + your own accent)
+- [x] **S** Custom accent colour picker (any theme + your own accent)
 - [x] **S** Size setting (scales everything) - see UI size above
 - [x] **M** Account list as **cards** (big avatar, status dot, game, CPU/RAM) as an alternative to the table
 - [x] **S** Wider Status column / tooltips with the full "In game: …" text; hide the Game column when empty
 - [x] **M** In-app toast notifications (bottom-right) for launch finished / failed / kicked, instead of log-only
 - [x] **S** Log moved to the Activity page (Copy / Open log file / Clear)
-- [ ] **S** Activity filter (errors only / one account)
+- [x] **S** Activity filter (problems only / one account / search)
 - [x] **M** Command palette (Ctrl+K): "launch …", "stop …", "view screen …", "theme …"
 - [x] **S** Keyboard shortcuts: Enter = launch, Ctrl+Shift+S = stop all, F2 = edit, Ctrl+1…9 = tabs
 - [x] **S** Sober / Roblox version + multi-instance state in the header (free RAM: Performance tab estimate)
@@ -80,7 +80,8 @@ the real running app was ~450 MB after hours.
       main Sober profile (the killer feature for single-instance users and people with 2–3 accounts)
 - [x] **S** Pin to top
 - [ ] **S** Colour tags per account
-- [ ] **S** Drag and drop to reorder; drag cookie files onto the window to import
+- [x] **S** Drop cookie files / text / accounts .dat onto the window to import
+- [ ] **S** Drag and drop to reorder accounts
 - [x] **S** Robux, Premium, account age, friends / followers / groups: on the profile page
 - [x] **M** Encrypted export / import of accounts (password file, same format as accounts.dat)
 - [x] **S** Restore from backup dialog (the backups already exist in `backups/`, just no UI)
@@ -100,8 +101,8 @@ the real running app was ~450 MB after hours.
 - [x] **M** Server browser: quick join (emptiest / busy with room for everyone), auto-refresh, game name, Play menu
 - [ ] 🔬 **M** Server region / ping estimate (needs the datacenter map)
 - [x] **S** Private server list per game (game page > Your private servers)
-- [ ] **M** Launch queue with progress bar and per-account result (✓ / failed, why) + "retry failed"
-- [ ] **M** Scheduled launches (start preset X at 18:00, stop at 02:00)
+- [x] **M** Launch queue with progress bar and per-account result (✓ / failed, why) + "retry failed"
+- [x] **M** Scheduled launches (start preset X at 18:00, stop at 02:00) - Presets page > Schedule
 - [x] **S** Desktop shortcuts per account / preset (`.desktop` files: "Launch ArcticTweaK in ABOVE")
 - [x] **M** CLI: `cellar launch <account|preset> [--place ID]`, `cellar stop all`, `cellar list` (talks to the
       running Cellar over its local socket)
@@ -122,7 +123,7 @@ the real running app was ~450 MB after hours.
 - [ ] **S** Better recording: mouse paths (optional), trim pauses, edit after recording
 - [ ] **M** Global shortcut "stop all macros" (KDE global shortcuts / XDG GlobalShortcuts portal)
 - [ ] 🔬 **S** Invisible screen size per account (540p) - macros use 1280x720 coordinates, would need scaling
-- [ ] **M** Per-account audio: mute alts by default, volume slider (PipeWire, `pactl` per client)
+- [x] **M** Per-account audio: Mute alts, Mute / Unmute, per-account volume (PipeWire pw-dump + wpctl, by cgroup)
 - [x] **S** Macro library: import / export macros as files, share with friends
 
 ## 6. Performance and resources
@@ -130,9 +131,9 @@ the real running app was ~450 MB after hours.
 - [x] **M** **Freeze / resume** an alt without closing it (`systemctl --user freeze` on its scope: 0 CPU while
       frozen, the game reconnects or kicks depending on how long)
 - [x] **S** CPU / RAM per account in the list (usage.py already reads cgroups)
-- [ ] **M** Usage history graph (last hour) on the Performance page
+- [x] **M** Usage history graphs (CPU and memory, last hour, hover for values) on the Performance page
 - [x] **S** "How many alts fit" estimate from free RAM and the measured cost per alt
-- [ ] **S** Per-account graphics preset (not only FPS cap)
+- [x] **S** Per-account graphics preset (Edit account > Graphics)
 - [ ] 🔬 **S** GPU choice per account on hybrid laptops (`DRI_PRIME`)
 - [x] **S** Auto-close alts when RAM gets low (keep the main alive)
 

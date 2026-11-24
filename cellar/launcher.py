@@ -310,7 +310,7 @@ class Launcher:
 
         if isolated:
             sober.ensure_profile(a, s, logf)
-            flags, ignored = gfx.final(s, a.full_quality)
+            flags, ignored = gfx.final(s, a.full_quality, a.gfx_preset)
             sober.write_profile_settings(a, s, flags, logf)
 
         screen = None

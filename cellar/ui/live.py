@@ -69,6 +69,10 @@ class LiveMixin:
             return
         res = self.sampler.sample_each({i.account.id: usage.groups_for([i]) for i in alive})
         cores, mem = res.pop("")
+        if cores is not None:                       # Performance > Last hour
+            now = time.time()
+            self.perf_page.g_cpu.add(now, cores / (os.cpu_count() or 1) * 100)
+            self.perf_page.g_mem.add(now, mem)
         self.model.usage = res
         alts = [m for i in alive if not i.account.full_quality and (m := res.get(i.account.id, (0, 0))[1]) > 2**28]
         if self.tabs.currentWidget() is self.perf_page:
@@ -82,7 +86,7 @@ class LiveMixin:
 
     def tick(self):
         alive = self.update_running()
-        if self.isVisible():
+        if self.isVisible() or alive:       # keep the Last hour graphs going while Cellar sits in the tray
             self.update_usage(alive)
         try:
             self.windows_page.auto_tick()
@@ -205,6 +209,64 @@ class LiveMixin:
             if len(news) > 3:
                 self.toast(f"...and {len(news) - 3} more friends came online or started a game.", "info")
         bg(work, done=done, err=lambda _: setattr(self, "_friends_busy", False))
+
+    def audio_tick(self):
+        """Every few seconds while clients run: each account's sound (Mute alts / its own volume)."""
+        from .. import audio
+        if getattr(self, "_audio_busy", False) or not self.model.running:
+            return
+        s = store.settings
+        targets = {}
+        for i in self.launcher.alive_instances():
+            a = i.account
+            vol = a.volume if a.volume >= 0 else (0 if s.mute_alts and not a.full_quality else 100)
+            if i.pid and (vol != 100 or a.volume >= 0 or s.mute_alts):
+                cg = usage.cgroup_of(i.pid)
+                if cg:
+                    targets[cg] = (vol == 0, vol / 100)
+        if not targets:
+            return
+        self._audio_busy = True
+
+        def fin(_=None):
+            self._audio_busy = False
+        bg(audio.apply, targets, done=fin, err=fin)
+
+    def set_volume(self, accs, volume: int):
+        for a in accs:
+            a.volume = volume
+        store.save_accounts()
+        self.audio_tick()
+        self.log(("Muted " if volume == 0 else "Unmuted " if volume == 100 else f"Volume {volume}% for ")
+                 + ", ".join(a.name for a in accs[:4]) + (" ..." if len(accs) > 4 else "") + ".")
+
+    def schedule_tick(self):
+        """Every 30 s: scheduled presets that are due (schedule.py decides)."""
+        from .. import schedule
+        fired = schedule.due(store.settings.schedules)
+        if not fired:
+            return
+        for sc, kind in fired:
+            p = self.presets_page.find(sc.preset)
+            if p is None:
+                self.log(f"Schedule: there is no preset called '{sc.preset}' any more.")
+                continue
+            if kind == "start":
+                if self.launching:              # try again on the next tick (still inside the grace time)
+                    sc.last_start = ""
+                    continue
+                self.log(f"Schedule: running preset '{p.name}' ({sc.start}).")
+                self.presets_page.run(p)
+            else:
+                ids = {e.account_id for e in p.entries}
+                n = 0
+                for a in [a for a in store.accounts if a.id in ids]:
+                    if self.launcher.running(a):
+                        self.launcher.stop_account(a, self.log)
+                        n += 1
+                self.log(f"Schedule: stopped preset '{p.name}' ({sc.stop}) - {n} account(s) closed.")
+                self.desktop_notify("done", f"Schedule: stopped '{p.name}' ({n} account(s)).")
+        store.save_settings()
 
     def toast(self, text: str, kind: str = "info", action=None):
         """In-app message, bottom right. kind: info | good | warn | bad. action = (button text, function)."""

@@ -92,6 +92,8 @@ class Account:
     order: int = 0
     login_lost: bool = False
     pinned: bool = False        # always at the top of the list
+    volume: int = -1            # 0-100 %, -1 = default (Settings > Mute alts decides) - audio.py
+    gfx_preset: str = ""        # its own graphics preset (gfx.PRESETS key), "" = the global one / full quality
 
     @property
     def name(self) -> str:
@@ -282,6 +284,18 @@ class Preset:
 
 
 @dataclass
+class Schedule:
+    """Run a preset at a time of day (and optionally stop its accounts later) - Presets page > Schedule."""
+    preset: str = ""
+    start: str = "18:00"            # HH:MM
+    stop: str = ""                  # HH:MM, "" = leave them running
+    days: List[int] = field(default_factory=lambda: list(range(7)))     # 0 = Monday
+    enabled: bool = True
+    last_start: str = ""            # date it last fired (YYYY-MM-DD), so it fires once a day
+    last_stop: str = ""
+
+
+@dataclass
 class Macro:
     name: str = ""
     text: str = ""              # macros.py step language
@@ -292,6 +306,7 @@ class Macro:
 class AppSettings:
     first_run_done: bool = False
     theme: str = "blossom"         # theme.THEMES key (Settings > Appearance)
+    accent: str = ""                # your own accent colour (#rrggbb) on Cellar's themes, "" = the theme's own
     ui_scale: str = "auto"          # auto | 90 | 100 | 115 | 130 | 150 (% - Qt scale factor, applied at start)
     auto_scale: float = 1.0         # what "auto" uses: picked from the screen size at the previous start
     home_account: str = ""          # account id whose friends / favourites the Home tab shows ("" = your main)
@@ -342,6 +357,7 @@ class AppSettings:
         text="# Jumps and turns the camera now and then, so Roblox doesn't kick for being idle.\n"
              "tap space\nwait 500\nkey left 300\nwait 20000-40000\n")])
     startup_preset: str = ""
+    schedules: List[Schedule] = field(default_factory=list)
     preset_exact_servers: bool = False
     check_logins_at_startup: bool = True
     start_minimized_to_tray: bool = False
@@ -353,6 +369,7 @@ class AppSettings:
     win_w: int = 1360
     win_h: int = 820
     split: List[int] = field(default_factory=list)
+    mute_alts: bool = False         # accounts not marked Full quality play without sound (unless given a volume)
     min_free_ram_mb: int = 0        # before each launch, wait (up to 3 min) while less RAM than this is free
     low_ram_close_mb: int = 0       # watcher: free RAM below this -> close the newest alt (not "full quality")
     # Freeze: wake the alt for a moment every few seconds so it keeps answering the game server (a client that

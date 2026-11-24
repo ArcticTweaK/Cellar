@@ -180,10 +180,20 @@ class MainWindow(AccountsMixin, LaunchMixin, LiveMixin, QMainWindow):
         act = QWidget()
         av = QVBoxLayout(act)
         av.setContentsMargins(0, 0, 0, 0)
+        self._log_lines: list = []              # everything this session (the view may show a filtered part)
+        self.log_filter = QComboBox()
+        self.log_filter.addItem("Everything", "")
+        self.log_filter.addItem("Problems only", "!")
+        self.log_filter.currentIndexChanged.connect(self._refilter_log)
+        self.log_search = QLineEdit()
+        self.log_search.setPlaceholderText("Search the activity...")
+        self.log_search.setClearButtonEnabled(True)
+        self.log_search.textChanged.connect(self._refilter_log)
+        av.addWidget(row(self.log_filter, self.log_search, stretch=False))
         av.addWidget(self.logview, 1)
         av.addWidget(row(btn("Copy", lambda: QGuiApplication.clipboard().setText(self.logview.toPlainText())),
                          btn("Open log file", lambda: sober.open_folder(paths.LOG_FILE.parent)),
-                         btn("Clear", self.logview.clear)))
+                         btn("Clear", lambda: (self._log_lines.clear(), self.logview.clear()))))
         self.activity_page = page_frame("Activity", "Everything Cellar did, newest at the bottom.", act)
 
         # name, icon, page, where it lives: "main" = a big tab in the top bar, "tools" = the TOOLS menu,
@@ -222,6 +232,7 @@ class MainWindow(AccountsMixin, LaunchMixin, LiveMixin, QMainWindow):
         cv.addWidget(body, 1)
         cv.addWidget(self._build_bottombar())
         self.setCentralWidget(central)
+        self.setAcceptDrops(True)
         self.me.set_account(self.home_page.home_account())
         self.sampler = usage.Sampler()
 
@@ -271,6 +282,10 @@ class MainWindow(AccountsMixin, LaunchMixin, LiveMixin, QMainWindow):
         self.t_presence = QTimer(self, timeout=self.presence_tick)
         self.t_watcher = QTimer(self, timeout=self.watcher_tick)
         self.t_afk = QTimer(self, timeout=self.anti_afk_now)
+        self.t_audio = QTimer(self, timeout=self.audio_tick)
+        self.t_audio.start(5000)
+        self.t_schedule = QTimer(self, timeout=self.schedule_tick)
+        self.t_schedule.start(30000)
         self.t_friends = QTimer(self, timeout=self.friends_tick)
         self.t_friends.start(60000)
         self.t_logs = QTimer(self, timeout=self.log_tick)     # Roblox logs: joins and kicks within seconds
@@ -292,9 +307,43 @@ class MainWindow(AccountsMixin, LaunchMixin, LiveMixin, QMainWindow):
         """Thread-safe."""
         log.write(msg)
 
+    _PROBLEM = ("error", "failed", "could not", "kicked", "lost connection", "unexpectedly", "signed out",
+                "not found", "crash", "warning", "missing", "refused", "disconnected", "skipped")
+
+    def _log_matches(self, line: str) -> bool:
+        f, q = self.log_filter.currentData() or "", self.log_search.text().strip().lower()
+        low = line.lower()
+        if f == "!" and not any(w in low for w in self._PROBLEM):
+            return False
+        if f.startswith("@") and f"[{f[1:].lower()}]" not in low:
+            return False
+        return not q or q in low
+
+    def _refilter_log(self, *_):
+        cur = self.log_filter.currentData()
+        names = sorted({a.name for a in store.accounts})
+        if self.log_filter.count() != 2 + len(names):           # one entry per account
+            self.log_filter.blockSignals(True)
+            while self.log_filter.count() > 2:
+                self.log_filter.removeItem(2)
+            for n in names:
+                self.log_filter.addItem(f"Only {n}", "@" + n)
+            i = self.log_filter.findData(cur)
+            self.log_filter.setCurrentIndex(i if i >= 0 else 0)
+            self.log_filter.blockSignals(False)
+        self.logview.setPlainText("\n".join(x for x in self._log_lines if self._log_matches(x)))
+        self.logview.moveCursor(QTextCursor.End)
+
     def _append_log(self, line: str, replace: bool) -> None:
         fm = self.status_line.fontMetrics()
         self.status_line.setText(fm.elidedText(line, Qt.ElideRight, max(200, self.status_line.width() - 24)))
+        if replace and self._log_lines:
+            self._log_lines[-1] = line
+        else:
+            self._log_lines.append(line)
+            del self._log_lines[:-3000]
+        if not self._log_matches(line):
+            return
         doc = self.logview.document()
         if replace and self.logview.toPlainText():
             c = QTextCursor(doc.lastBlock())
@@ -321,6 +370,8 @@ class MainWindow(AccountsMixin, LaunchMixin, LiveMixin, QMainWindow):
             self.windows_page.refresh()
         elif self.tabs.widget(i) is self.settings_page:
             self.settings_page.update_status()
+        elif self.tabs.widget(i) is self.activity_page:
+            self._refilter_log()
         elif self.tabs.widget(i) is self.my_sober_page and not self.my_sober_page.dirty:
             self.my_sober_page.load()           # Sober's own settings menu may have changed the file
 
@@ -634,6 +685,36 @@ class MainWindow(AccountsMixin, LaunchMixin, LiveMixin, QMainWindow):
                          start_new_session=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         self.hide()                     # hidden: quitting does not ask about the running accounts (they stay)
         self.quit_app()
+
+    # ---------------------------------------------------------------- drop files onto the window
+    def dragEnterEvent(self, e):
+        if e.mimeData().hasUrls() or e.mimeData().hasText():
+            e.acceptProposedAction()
+
+    def dropEvent(self, e):
+        """Cookie files / pasted cookie text add accounts; an accounts file (.dat) is imported."""
+        from pathlib import Path
+        from .. import util
+        md = e.mimeData()
+        texts, dats = [], []
+        for u in md.urls() if md.hasUrls() else []:
+            f = Path(u.toLocalFile())
+            try:
+                if f.suffix.lower() == ".dat":
+                    dats.append(f)
+                elif f.is_file() and f.stat().st_size < 2 * 2**20:
+                    texts.append(f.read_text(errors="replace"))
+            except OSError:
+                pass
+        if md.hasText() and not md.hasUrls():
+            texts.append(md.text())
+        for f in dats:
+            self.add_windows_file(str(f))
+        cookies = list(dict.fromkeys(c for t in texts for c in util.extract_cookies(t)))
+        if cookies:
+            self.add_cookies(cookies)
+        elif texts and not dats:
+            self.toast("No Roblox cookies in what you dropped.", "warn")
 
     def open_palette(self):
         from .palette import Palette

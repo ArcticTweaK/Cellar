@@ -164,7 +164,7 @@ _icon_cache: Dict[tuple, QIcon] = {}
 def icon(name: str, token: str = "text") -> QIcon:
     """A bundled line icon in a theme colour (same look on every desktop, follows theme changes)."""
     t = current()
-    key = (name, token, t.key)
+    key = (name, token, t.key, t.accent)
     ic = _icon_cache.get(key)
     if ic is None:
         try:
@@ -410,6 +410,23 @@ def pad_spin(sb: QAbstractSpinBox) -> None:
         le.setTextMargins(4 if _current is not None and _current.key != "system" else 0, 0, 0, 0)
 
 
+_accent_override = ""
+
+
+def set_accent(hex_colour: str) -> None:
+    """Settings > Appearance > Accent: your own accent colour on any of Cellar's themes ('' = the theme's own).
+    Takes effect with the next apply()."""
+    global _accent_override
+    _accent_override = hex_colour if QColor(hex_colour or "").isValid() else ""
+
+
+def _on(colour: str) -> str:
+    """Text colour that reads well on a coloured button."""
+    c = QColor(colour)
+    lum = 0.2126 * c.redF() + 0.7152 * c.greenF() + 0.0722 * c.blueF()
+    return "#151418" if lum > 0.5 else "#ffffff"
+
+
 def apply(key: str) -> Theme:
     """Switches the whole app to a theme (any time, also while running)."""
     global _current, _orig_style, _orig_palette
@@ -418,6 +435,9 @@ def apply(key: str) -> Theme:
         _orig_style = app.style().name()
         _orig_palette = QPalette(app.palette())
     t = get(key)
+    if _accent_override and t.key != "system":
+        import dataclasses
+        t = dataclasses.replace(t, accent=_accent_override, on_accent=_on(_accent_override))
     if t.key == "system":
         app.setStyleSheet("")
         QApplication.setStyle(_orig_style)

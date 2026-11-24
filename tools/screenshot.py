@@ -53,6 +53,8 @@ def main() -> int:
         li.presence_type, li.where = (2, "Some Game") if i < 4 else (1, "")
 
     main_window.MainWindow.startup = lambda self: None     # no network, no adopting real clients
+    if os.environ.get("ACCENT"):
+        theme.set_accent(os.environ["ACCENT"])
     theme.apply(themes[0])
     w = main_window.MainWindow()
     w.model.running = {a.id for a in store.accounts}

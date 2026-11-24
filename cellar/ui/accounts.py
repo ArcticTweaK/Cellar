@@ -71,6 +71,11 @@ class AccountsMixin:
         self.playing_as.set_accounts(self.selected_accounts())
         self.launch_page.update_selection(self.selected_accounts())
 
+    @staticmethod
+    def _volume_of(a: Account) -> int:
+        s = store.settings
+        return a.volume if a.volume >= 0 else (0 if s.mute_alts and not a.full_quality else 100)
+
     def select_accounts(self, accs: List[Account]):
         """Makes exactly these accounts the selection (both views share it)."""
         sm = self.table.selectionModel()
@@ -134,6 +139,8 @@ class AccountsMixin:
         if any(store.live(a).cookie_bad for a in sel) and len(sel) == 1:
             m.addAction("Log in again...", lambda: self.add_browser(sel[0].username))
         m.addAction("Add to app menu (launch shortcut)", lambda: self.add_shortcuts(sel))
+        muted = all(self._volume_of(a) == 0 for a in sel)
+        m.addAction("Unmute" if muted else "Mute", lambda: self.set_volume(sel, 100 if muted else 0))
         pin = not all(a.pinned for a in sel)
         m.addAction("Pin to top" if pin else "Unpin", lambda: self.set_pinned(sel, pin))
         m.addSeparator()
@@ -362,9 +369,10 @@ class AccountsMixin:
         self.log(f"Exported {len(accs)} account(s) to {fn}. It holds their logins - keep it private. On the other "
                  "PC: Add account > Import accounts file.")
 
-    def add_windows_file(self):
-        fn, _ = QFileDialog.getOpenFileName(self, "Import accounts file", str(Path.home()),
-                                            "Accounts file (*.dat);;All files (*)")
+    def add_windows_file(self, fn: str = ""):
+        if not fn:
+            fn, _ = QFileDialog.getOpenFileName(self, "Import accounts file", str(Path.home()),
+                                                "Accounts file (*.dat);;All files (*)")
         if not fn:
             return
         raw = Path(fn).read_bytes()

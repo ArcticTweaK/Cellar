@@ -73,11 +73,17 @@ def managed(g: GfxSettings) -> Dict[str, object]:
     return d
 
 
-def final(s: AppSettings, full_quality: bool = False) -> Tuple[Dict[str, object], List[str]]:
+def final(s: AppSettings, full_quality: bool = False, preset: str = "") -> Tuple[Dict[str, object], List[str]]:
     """Everything that will really be written: managed flags + the user's own (filtered).
-    full_quality (your main): only the user's own flags, not the graphics preset meant for alts."""
+    full_quality (your main): only the user's own flags, not the graphics preset meant for alts.
+    preset: an account's own graphics preset (Edit account) instead of the global one."""
     ignored: List[str] = []
-    d = {} if full_quality else managed(s.gfx)
+    g = s.gfx
+    if preset and preset in PRESETS and preset != "Custom":
+        import copy
+        g = copy.copy(s.gfx)
+        apply_preset(g, preset)
+    d = {} if full_quality and not preset else managed(g)
     custom = (s.custom_flags or "").strip()
     if custom:
         try:

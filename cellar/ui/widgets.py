@@ -358,3 +358,99 @@ class Toast(QFrame):
     def enterEvent(self, _):           # stays while the mouse is on it
         self.anim.stop()
         self.fx.setOpacity(1.0)
+
+
+class UsageGraph(QWidget):
+    """One measure over the last hour (Performance page): a thin line, a recessive grid, the latest value in the
+    title, and a crosshair + exact value under the mouse. CPU and memory get one graph each (never two scales)."""
+
+    WINDOW = 3600.0
+
+    def __init__(self, title: str, fmt, floor: float = 1.0):
+        super().__init__()
+        self.title, self.fmt, self.floor = title, fmt, floor
+        self.points: list = []          # (unix time, value)
+        self.hover_x: Optional[int] = None
+        self.setMinimumHeight(150)
+        self.setMouseTracking(True)
+
+    def add(self, t: float, v: float):
+        self.points.append((t, v))
+        cut = t - self.WINDOW
+        while self.points and self.points[0][0] < cut:
+            self.points.pop(0)
+        self.update()
+
+    def leaveEvent(self, _):
+        self.hover_x = None
+        self.update()
+
+    def mouseMoveEvent(self, ev):
+        self.hover_x = int(ev.position().x())
+        self.update()
+
+    def _plot(self) -> QRect:
+        return self.rect().adjusted(8, 30, -8, -22)
+
+    def paintEvent(self, _):
+        import time as _t
+        from PySide6.QtCore import QPointF
+        from PySide6.QtGui import QPainterPath, QPen
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing)
+        r = self._plot()
+        now = _t.time()
+        top = max([v for _, v in self.points] + [self.floor]) * 1.15
+        f = QFont(self.font())
+        f.setBold(True)
+        p.setFont(f)
+        p.setPen(theme.qc("text"))
+        last = self.points[-1][1] if self.points else None
+        p.drawText(QRect(8, 4, self.width() - 16, 22), Qt.AlignLeft | Qt.AlignVCenter,
+                   self.title + (f"   {self.fmt(last)}" if last is not None else ""))
+        small = QFont(self.font())
+        small.setPointSizeF(small.pointSizeF() * 0.85)
+        p.setFont(small)
+        grid = QColor(theme.c("border"))
+        for i in range(4):                                  # recessive grid: 0, 1/3, 2/3, top
+            y = r.bottom() - r.height() * i / 3
+            p.setPen(QPen(grid, 1))
+            p.drawLine(r.left(), int(y), r.right(), int(y))
+        p.setPen(theme.qc("muted"))
+        p.drawText(QRect(r.left(), r.bottom() + 4, 200, 16), Qt.AlignLeft, "60 min ago")
+        p.drawText(QRect(r.right() - 200, r.bottom() + 4, 200, 16), Qt.AlignRight, "now")
+        p.drawText(QRect(r.right() - 200, r.top() - 16, 200, 14), Qt.AlignRight, self.fmt(top))
+        if len(self.points) < 2:
+            p.drawText(r, Qt.AlignCenter, "Collecting... (one point every few seconds while accounts run)")
+            return
+
+        def xy(t, v):
+            return QPointF(r.left() + r.width() * (1 - (now - t) / self.WINDOW), r.bottom() - r.height() * v / top)
+        path = QPainterPath()
+        path.moveTo(xy(*self.points[0]))
+        for t, v in self.points[1:]:
+            path.lineTo(xy(t, v))
+        pen = QPen(theme.qc("accent"), 2)
+        pen.setCapStyle(Qt.RoundCap)
+        pen.setJoinStyle(Qt.RoundJoin)
+        p.setPen(pen)
+        p.drawPath(path)
+        if self.hover_x is not None and r.left() <= self.hover_x <= r.right():
+            t_at = now - self.WINDOW * (1 - (self.hover_x - r.left()) / r.width())
+            t, v = min(self.points, key=lambda tv: abs(tv[0] - t_at))
+            pt = xy(t, v)
+            p.setPen(QPen(theme.qc("muted"), 1, Qt.DashLine))
+            p.drawLine(int(pt.x()), r.top(), int(pt.x()), r.bottom())
+            p.setPen(QPen(theme.qc("surface"), 2))           # a ring so the dot stands off the line
+            p.setBrush(theme.qc("accent"))
+            p.drawEllipse(pt, 5, 5)
+            label = f"{_t.strftime('%H:%M:%S', _t.localtime(t))}  ·  {self.fmt(v)}"
+            fm = QFontMetrics(small)
+            w = fm.horizontalAdvance(label) + 16
+            bx = min(max(int(pt.x()) - w // 2, r.left()), r.right() - w)
+            box = QRect(bx, r.top() + 2, w, fm.height() + 8)
+            p.setPen(QPen(theme.qc("border"), 1))
+            p.setBrush(theme.qc("raised"))
+            p.drawRoundedRect(box, 6, 6)
+            p.setPen(theme.qc("text"))
+            p.drawText(box, Qt.AlignCenter, label)

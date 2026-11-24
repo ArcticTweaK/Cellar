@@ -75,10 +75,12 @@ class LaunchPage(QWidget):
 
         g, f = group("Go")
         self.b_launch = btn("Launch selected", self.mw.launch_selected, icon="play", primary=True)
-        self.b_all = btn("Launch all listed", self.mw.launch_all_listed, icon="media-seek-forward")
+        self.b_all = btn("Launch all listed", self.mw.launch_all_listed)
         self.b_stop = btn("Cancel", self.mw.stop_launch, tip="Stop a launch sequence that is still going")
         self.b_stop.setEnabled(False)
         f.addRow(row(self.b_launch, self.b_all, self.b_stop))
+        self.queue = LaunchQueue(self.mw)
+        f.addRow(self.queue)
         f.addRow(hint("Each account runs in its own isolated Sober profile (see Settings). "
                       "Windows are only moved by the Windows page."))
         v.addWidget(g)
@@ -410,3 +412,91 @@ class HistoryDialog(QDialog):
         store.settings.history.clear()
         store.save_settings()
         self.table.setRowCount(0)
+
+
+class LaunchQueue(QWidget):
+    """The launch sequence as it happens: a progress bar, one line per account (waiting / starting / started /
+    failed and why) and Retry failed. Hidden until something launches."""
+
+    ICON = {"wait": "○", "go": "◐", "ok": "✓", "fail": "✗", "skip": "–"}
+    TOKEN = {"wait": "muted", "go": "accent", "ok": "good", "fail": "bad", "skip": "muted"}
+
+    def __init__(self, mw):
+        super().__init__()
+        from PySide6.QtWidgets import QHBoxLayout, QListWidget, QProgressBar
+        self.mw = mw
+        self.rows = {}              # account id -> (item, state, reason)
+        self.accs = []
+        self.spec, self.allow_saved = None, True
+        v = QVBoxLayout(self)
+        v.setContentsMargins(0, 6, 0, 0)
+        top = QHBoxLayout()
+        self.bar = QProgressBar()
+        self.bar.setTextVisible(False)
+        self.bar.setFixedHeight(8)
+        self.label = QLabel()
+        top.addWidget(self.label)
+        top.addWidget(self.bar, 1)
+        self.retry = btn("Retry failed", self._retry)
+        self.retry.setVisible(False)
+        top.addWidget(self.retry)
+        v.addLayout(top)
+        self.list = QListWidget()
+        self.list.setMaximumHeight(170)
+        v.addWidget(self.list)
+        self.setVisible(False)
+
+    def start(self, accs, spec, allow_saved):
+        from PySide6.QtWidgets import QListWidgetItem
+        self.accs, self.spec, self.allow_saved = list(accs), spec, allow_saved
+        self.list.clear()
+        self.rows = {}
+        for a in accs:
+            it = QListWidgetItem()
+            self.list.addItem(it)
+            self.rows[a.id] = [it, "wait", ""]
+            self._paint(a)
+        self.bar.setRange(0, len(accs))
+        self.bar.setValue(0)
+        self.retry.setVisible(False)
+        self.setVisible(True)
+        self._summary(False)
+
+    def set(self, a, state: str, reason: str = ""):
+        r = self.rows.get(a.id)
+        if r is None:
+            return
+        r[1], r[2] = state, reason
+        self._paint(a)
+        self.bar.setValue(sum(1 for _, st, _ in self.rows.values() if st in ("ok", "fail", "skip")))
+        if state == "go":
+            self.list.scrollToItem(r[0])
+        self._summary(False)
+
+    def _paint(self, a):
+        from PySide6.QtGui import QBrush
+        it, st, why = self.rows[a.id]
+        it.setText(f"{self.ICON[st]}  {a.name}" + (f"  -  {why}" if why else ""))
+        it.setForeground(QBrush(theme.qc(self.TOKEN[st])))
+        it.setToolTip(why)
+
+    def finish(self, cancelled: bool):
+        for a in self.accs:
+            if self.rows[a.id][1] in ("wait", "go"):
+                self.set(a, "skip", "cancelled" if cancelled else "")
+        self._summary(True, cancelled)
+
+    def _summary(self, done: bool, cancelled: bool = False):
+        states = [st for _, st, _ in self.rows.values()]
+        ok, bad = states.count("ok"), states.count("fail")
+        if done:
+            self.label.setText(theme.span("bad" if bad else "good", ("Cancelled: " if cancelled else "Done: ")
+                                          + f"{ok} started" + (f", {bad} failed" if bad else "")))
+            self.retry.setVisible(bad > 0)
+        else:
+            self.label.setText(f"Launching {sum(1 for x in states if x != 'wait')} of {len(states)}")
+
+    def _retry(self):
+        failed = [a for a in self.accs if self.rows.get(a.id, [None, ""])[1] == "fail"]
+        if failed and self.spec is not None:
+            self.mw.start_launch(failed, fixed=self.spec, allow_saved=self.allow_saved)
