@@ -18,6 +18,8 @@ The developer's machine: **NixOS, KDE Plasma 6, Wayland**.
   OUT_DIR [themes] [tabs]` renders the main window off-screen with fake accounts and fake recent games, no network
   (tabs: 0 Launch, 1 Presets, 2 Macros, 3 Anti-AFK, 4 Windows, 5 My Sober, 6 Performance, 7 Settings, 8 Help;
   EMPTY=1 = no accounts, TABLE=1 = table view), then Read the PNGs.
+- README picture: `nix develop -c python tools/readme_screenshot.py` rewrites docs/screenshot.png (made-up account
+  names, real game icons from ~/.cache/cellar, game names from Roblox's public API). Never use real account names.
 - Run from source: `nix develop -c python -m cellar` (devShell has PySide6, requests, cryptography, secretstorage,
   pasta, sway, wayvnc). Or `nix build` / `nix run .` (`result` symlink in repo is a nix build output, gitignored).
 - Non-Nix: `./install.sh` (venv in `~/.local/share/cellar-app`, symlink `~/.local/bin/cellar`).
