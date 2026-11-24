@@ -159,6 +159,9 @@ class AccountsMixin:
         m.addSeparator()
         m.addAction("Edit...", self.edit_selected)
         m.addAction("Details", self.details_selected)
+        if len(sel) == 1:
+            m.addAction("History (what it played)...", lambda: self.open_history(sel[0]))
+            m.addAction("Roblox log...", lambda: self.open_roblox_log(sel[0]))
         if len(sel) == 1 and sel[0].user_id:
             from .launch_pages import open_url
             m.addAction("Open profile on roblox.com",
@@ -178,6 +181,14 @@ class AccountsMixin:
         m.addSeparator()
         m.addAction("Remove", self.remove_selected)
         popup(m, view.viewport().mapToGlobal(pos))
+
+    def open_history(self, a: Optional[Account] = None):
+        from .launch_pages import HistoryDialog
+        HistoryDialog(self, a).exec()
+
+    def open_roblox_log(self, a: Optional[Account] = None):
+        from .log_viewer import RobloxLogDialog
+        RobloxLogDialog(self, a).exec()
 
     def copy(self, items: List[str]):
         QGuiApplication.clipboard().setText("\n".join(items))

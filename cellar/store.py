@@ -54,6 +54,11 @@ def load_settings() -> None:
         s.accounts_view = "table"       # the MultiHub layout shows the list as a table (Cards still switches)
         s.settings_version = 3
         _save_settings()
+    if raw and int(raw.get("settings_version", 1) or 1) < 4:
+        for r in s.history:             # joins from before sessions had an end: their length is unknown
+            r.end = -1.0
+        s.settings_version = 4
+        _save_settings()
     s.anti_afk_action = s.anti_afk_action if s.anti_afk_action in ("Zoom", "Space", "Nudge") else "Zoom"
     s.layout.min_w = max(100, s.layout.min_w)
     s.layout.min_h = max(80, s.layout.min_h)

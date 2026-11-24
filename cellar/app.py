@@ -113,6 +113,11 @@ def main(argv=None) -> int:
     QLocalServer.removeServer(sock_name)
     server = QLocalServer()
     server.listen(sock_name)
+    # Stop answering the moment Cellar quits, not when the process finally ends: Python still waits for running
+    # background jobs (seconds, measured), and meanwhile a new Cellar (Restart, or you opening it again) would
+    # connect to this dying one, ask it to show itself and quit - nothing opened. Closing here also keeps the late
+    # QLocalServer destructor from deleting the socket file the new Cellar has made by then.
+    app.aboutToQuit.connect(server.close)
 
     from .ui.common import app_icon, init_threading
     app.setWindowIcon(app_icon())

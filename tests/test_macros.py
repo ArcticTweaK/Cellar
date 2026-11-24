@@ -63,8 +63,54 @@ class Blocks(unittest.TestCase):
         r = macros.Runner.__new__(macros.Runner)
         import threading
         r._stop, r.deadline, r.timed_out, r.logf, r.who, r.name = threading.Event(), 0, False, print, "t", "m"
+        r.on_step, r._gate = None, threading.Event()
         steps, _ = macros.parse("repeat 2 {\ntap a\nrepeat 2 {\ntap b\n}\n}\nwait 1")
         v = FakeVNC()
         self.assertTrue(r._exec(v, steps, set()))
         a, b = ord("a"), ord("b")
         self.assertEqual(v.taps, [a, b, b, a, b, b])
+
+    def test_steps_know_their_line(self):
+        steps, _ = macros.parse("# c\ntap e\n\nrepeat 2 {\n  wait 5\n}")
+        self.assertEqual(steps[0].line, 2)
+        self.assertEqual(steps[1].line, 4)
+        self.assertEqual(steps[1][1][1][0].line, 5)
+        self.assertEqual(steps[0], ("tap", (ord("e"),)))         # still compares like a plain (op, args) tuple
+
+    def test_step_by_step(self):
+        import queue
+        import threading
+
+        class FakeVNC:
+            def __init__(self):
+                self.taps = []
+
+            def tap(self, sym, hold=0.05):
+                self.taps.append(sym)
+        shown = queue.Queue()
+        r = macros.Runner.__new__(macros.Runner)
+        r._stop, r.deadline, r.timed_out, r.logf, r.who, r.name = threading.Event(), 0, False, print, "t", "m"
+        r.on_step, r._gate = (lambda line, what: shown.put((line, what))), threading.Event()
+        steps, _ = macros.parse("repeat 2 {\ntap a\n}\nwait 60000")
+        v = FakeVNC()
+        done = []
+        t = threading.Thread(target=lambda: done.append(r._exec(v, steps, set())))
+        t.start()
+        lines = []
+        for _ in range(3):
+            line, what = shown.get(timeout=2)
+            lines.append(line)
+            self.assertEqual(len(v.taps), len([x for x in lines[:-1] if x == 2]))   # nothing runs before "next"
+            r.next_step()
+        t.join(2)
+        self.assertEqual(lines, [2, 2, 4])
+        self.assertEqual(done, [True])                       # the 60 s wait was skipped while stepping
+        # stopping while it waits for "next"
+        r._stop.clear()
+        r._gate.clear()
+        t = threading.Thread(target=lambda: done.append(r._exec(v, steps, set())))
+        t.start()
+        shown.get(timeout=2)
+        r.stop()
+        t.join(2)
+        self.assertEqual(done[-1], False)

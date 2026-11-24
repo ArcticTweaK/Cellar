@@ -15,11 +15,11 @@ from PySide6.QtWidgets import (QAbstractItemView, QButtonGroup, QHBoxLayout, QLa
                                QListWidgetItem, QMenu, QPushButton, QSizePolicy, QStackedWidget, QStyle,
                                QStyledItemDelegate, QVBoxLayout, QWidget)
 
-from .. import api, games, paths, playlink, store, theme, util
+from .. import api, games, paths, playlink, sessions, store, theme, util
 from ..games import Game
 from ..models import Account, LaunchSpec, PrivateServer
 from ..specs import LaunchForm
-from .common import Dialog, bg, btn, chk, hint, popup, row, spin, warn
+from .common import Dialog, ask, bg, btn, chk, hint, popup, row, spin, warn
 from .dialogs import GamePicker, ServerPicker
 from .widgets import eyebrow
 
@@ -779,48 +779,96 @@ class LaunchPage(QWidget):
 
 
 class HistoryDialog(Dialog):
-    """Join history: every server an account entered (read from its Roblox log). Rejoin any of them."""
+    """History: every session (an account in one server, from its Roblox log) with how long it lasted, and the
+    time played in the last 7 days per account and game. Rejoin any server. Local only (settings.history)."""
 
-    def __init__(self, mw):
+    def __init__(self, mw, account: Optional[Account] = None):
         super().__init__(mw)
-        import time as _t
-        from PySide6.QtWidgets import QAbstractItemView, QHeaderView, QTableWidget, QTableWidgetItem
+        from PySide6.QtWidgets import QAbstractItemView, QComboBox, QHeaderView, QTabWidget, QTableWidget
         self.mw = mw
-        self.setWindowTitle("Join history")
-        self.resize(760, 520)
+        self.setWindowTitle("History")
+        self.resize(820, 560)
         v = QVBoxLayout(self)
-        v.addWidget(hint("Every server your accounts joined while Cellar ran (newest first). Double-click or "
-                         "<b>Rejoin</b> to put accounts back into that exact server."))
-        self.table = QTableWidget(0, 4)
-        self.table.setHorizontalHeaderLabels(["When", "Account", "Game", "Server"])
+        v.addWidget(hint("What your accounts played while Cellar ran, newest first - kept on this PC only. "
+                         "Double-click a session (or <b>Rejoin</b>) to put accounts back into that exact server."))
+        self.who = QComboBox()
+        self.who.addItem("All accounts", "")
+        for a in store.accounts:
+            self.who.addItem(a.name, a.id)
+        if account is not None:
+            self.who.setCurrentIndex(max(0, self.who.findData(account.id)))
+        self.who.currentIndexChanged.connect(lambda *_: self.fill())
+        v.addWidget(row(QLabel("Show"), self.who))
+        self.tabs = QTabWidget()
+        self.table = QTableWidget(0, 5)
+        self.table.setHorizontalHeaderLabels(["When", "Account", "Game", "How long", "Server"])
+        self.totals = QTableWidget(0, 4)
+        self.totals.setHorizontalHeaderLabels(["Account", "Game", "Sessions", "Time played"])
+        for t in (self.table, self.totals):
+            t.setSelectionBehavior(QAbstractItemView.SelectRows)
+            t.setSelectionMode(QAbstractItemView.SingleSelection)
+            t.setEditTriggers(QAbstractItemView.NoEditTriggers)
+            t.verticalHeader().hide()
+            t.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeToContents)
         self.table.horizontalHeader().setSectionResizeMode(2, QHeaderView.Stretch)
-        self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
-        self.table.setSelectionMode(QAbstractItemView.SingleSelection)
-        self.table.setEditTriggers(QAbstractItemView.NoEditTriggers)
-        self.table.verticalHeader().hide()
-        names = {e.place_id: e.name for e in store.settings.recent if e.name}
-        recs = store.settings.history
-        self.table.setRowCount(len(recs))
-        for r, h in enumerate(recs):
-            when = _t.strftime("%a %d %b  %H:%M", _t.localtime(h.ts))
-            for c, text in enumerate((when, h.account, names.get(h.place_id) or str(h.place_id), h.job_id[:8] + "…")):
-                it = QTableWidgetItem(text)
-                if c == 3:
-                    it.setToolTip(h.job_id)
-                self.table.setItem(r, c, it)
-        self.table.resizeColumnsToContents()
-        self.table.horizontalHeader().setSectionResizeMode(2, QHeaderView.Stretch)
+        self.totals.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
         self.table.doubleClicked.connect(lambda *_: self.rejoin())
-        v.addWidget(self.table, 1)
-        if not recs:
-            v.addWidget(hint("Nothing yet - joins are recorded from now on."))
+        self.tabs.addTab(self.table, "Sessions")
+        self.tabs.addTab(self.totals, "Time played (last 7 days)")
+        v.addWidget(self.tabs, 1)
+        self.empty = hint("Nothing yet - sessions are recorded from the Roblox log while Cellar runs.")
+        v.addWidget(self.empty)
         self.rejoin_btn = btn("Rejoin...", self.rejoin, primary=True)
         v.addWidget(row(self.rejoin_btn, btn("Copy Job ID", self.copy), btn("Clear history", self.clear),
-                        btn("Close", self.reject)))
+                        None, btn("Close", self.reject), stretch=False))
+        self.fill()
+
+    def _recs(self):
+        aid = self.who.currentData()
+        return [h for h in store.settings.history if not aid or h.account_id == aid]
+
+    def fill(self):
+        from PySide6.QtWidgets import QTableWidgetItem
+        names = {e.place_id: e.name for e in store.settings.recent if e.name}
+        recs = self._recs()
+        self._rows = recs
+        self.table.setRowCount(len(recs))
+        for r, h in enumerate(recs):
+            secs = sessions.duration(h)
+            took = "-" if secs < 0 else ("playing now · " if not h.end else "") + sessions.human(secs)
+            when = time.strftime("%a %d %b  %H:%M", time.localtime(h.ts))
+            for c, text in enumerate((when, h.account, names.get(h.place_id) or f"place {h.place_id}", took,
+                                      h.job_id[:8] + "…")):
+                it = QTableWidgetItem(text)
+                if c == 4:
+                    it.setToolTip(h.job_id)
+                if c == 3 and not h.end:
+                    it.setForeground(theme.qc("good"))
+                self.table.setItem(r, c, it)
+        aid = self.who.currentData()
+        rows = sessions.totals(recs, since=time.time() - 7 * 86400)
+        per_acc = {}
+        for a, _, n, secs in rows:
+            per_acc[a] = per_acc.get(a, 0.0) + secs
+        lines = rows + ([] if aid or len(per_acc) < 2 else [(a, -1, 0, t) for a, t in
+                                                           sorted(per_acc.items(), key=lambda x: -x[1])])
+        self.totals.setRowCount(len(lines))
+        for r, (a, place, n, secs) in enumerate(lines):
+            total = place == -1                 # one line per account at the bottom: all its games together
+            cells = (a, "all games" if total else names.get(place) or f"place {place}",
+                     "" if total else str(n), sessions.human(secs))
+            for c, text in enumerate(cells):
+                it = QTableWidgetItem(text)
+                if total:
+                    f = it.font()
+                    f.setBold(True)
+                    it.setFont(f)
+                self.totals.setItem(r, c, it)
+        self.empty.setVisible(not recs)
 
     def _rec(self):
         r = self.table.currentRow()
-        return store.settings.history[r] if 0 <= r < len(store.settings.history) else None
+        return self._rows[r] if 0 <= r < len(self._rows) else None
 
     def rejoin(self):
         h = self._rec()
@@ -835,9 +883,11 @@ class HistoryDialog(Dialog):
             QGuiApplication.clipboard().setText(h.job_id)
 
     def clear(self):
+        if not ask(self, "Clear history", "Remove every recorded session (and the time played)?"):
+            return
         store.settings.history.clear()
         store.save_settings()
-        self.table.setRowCount(0)
+        self.fill()
 
 
 class LaunchQueue(QWidget):

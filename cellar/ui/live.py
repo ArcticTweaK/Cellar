@@ -10,7 +10,8 @@ from typing import List, Optional
 import shiboken6
 from PySide6.QtWidgets import QSystemTrayIcon
 
-from .. import APP_ID, APP_NAME, __version__, antiafk, api, background, log, sober, store, theme, updates, usage
+from .. import (APP_ID, APP_NAME, __version__, antiafk, api, background, log, sessions, sober, store, theme,
+               updates, usage)
 from ..models import Instance, LaunchSpec
 from .common import bg, info, warn
 from .dialogs import ReleaseNotesDialog
@@ -22,6 +23,8 @@ class LiveMixin:
     def update_running(self) -> List[Instance]:
         alive = self.launcher.alive_instances()
         self.model.running = {i.account.id for i in alive}
+        if sessions.close_missing(store.settings.history, self.model.running):     # its window is gone
+            store.save_settings()
         self.model.frozen = {i.account.id for i in alive if i.frozen}
         self.model.macro = {i.account.id for i in alive if i.macro and i.macro.running}
         self.model.refresh_status()

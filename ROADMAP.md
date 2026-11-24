@@ -20,7 +20,9 @@ Roblox moderation; keep it opt-in with a clear warning. 🔬 = research first (S
 - [x] **M** Launch tab: Game / Server / Private server / Friend; Your games as tiles (recent + the main account's
       favourites); search or paste a link; Quick join + History; saved private servers; friends online to follow;
       a launch button that says what will happen
-- [ ] **S** Audit every tab against DESIGN.md (Settings and Performance are still long forms)
+- [x] **S** Audit Settings / Performance against DESIGN.md: one-line intro (measurements in the FPS cap tooltip),
+      memory options that say what they measure, normal-size buttons, the accent hint on its own line, "Join
+      address (advanced)" explained, alert options grey out while their switch is off
 
 ## Parked (website features: roblox.com + RoValra do these; not Cellar's job)
 
@@ -55,6 +57,9 @@ the real running app was ~450 MB after hours.
       (only success is cached)
 - [x] **S** Move up / Move down selected a different account afterwards (the selection was read back by row
       after the list had been reordered); `refresh_accounts(select=ids)` now
+- [x] **S** Restart (Settings > Size) did not bring Cellar back: the new copy found the old one still quitting
+      (background jobs finishing) and handed over to it. The socket now closes when quitting starts, and the
+      restarter waits for the old process (max 15 s). Same fix for reopening Cellar right after quitting
 
 ## 1. Look and feel
 
@@ -102,7 +107,8 @@ the real running app was ~450 MB after hours.
 - [x] **S** Restore from backup dialog (the backups already exist in `backups/`, just no UI)
 - [x] **S** Re-login button on "Signed out" accounts that opens the browser login pre-filled
 - [x] **S** Bulk edit: background mode, full quality, auto macro, group
-- [ ] **S** Auto-lock: ask for the password again after N minutes idle (password mode)
+- [x] **S** Auto-lock (password mode): after N minutes in the background the window locks (accounts keep
+      running; dialogs close, shortcuts off); Ctrl+L / tray > Lock
 - [x] **M** Full-body avatar refreshed on the profile page
 - [x] **S** Headshot in the screen viewer title (window icon)
 
@@ -130,9 +136,9 @@ the real running app was ~450 MB after hours.
 - [x] **M** **Screen wall**: one window with live thumbnails of every background account; click to open
 - [x] **S** "macro" marker in the account list's status (live thumbnails: see the screen wall)
 - [x] **S** Screenshot button in the viewer (saved to Pictures/Cellar)
-- [ ] **S** Attach screenshots to Discord alerts
+- [x] **S** Attach screenshots to Discord alerts (disconnects of background accounts: their screen, before the rejoin)
 - [x] **M** Macro editor: syntax highlighting, mistakes underlined live on their line, Run once (test)
-- [ ] **S** Macro step-by-step run
+- [x] **S** Macro step-by-step run (line highlighted, Next step / F10, waits skipped)
 - [x] **M** More steps: `repeat N { }`, `random { }`, `stop after 30m` (nested blocks)
 - [ ] ⚠ **L** `ifcolor x y #hex` / `waitcolor` (pixel checks on the account's own screen): react to the game
 - [ ] **S** Better recording: mouse paths (optional), trim pauses, edit after recording
@@ -155,14 +161,16 @@ the real running app was ~450 MB after hours.
 ## 7. Window layouts
 
 - [x] **M** Layouts on Sway (tested on a real headless sway) and Hyprland (from its docs - needs a tester)
-- [ ] **S** Saved layouts separate from presets; one-click "spread over all monitors"
+- [x] **S** Saved layouts separate from presets; "All monitors" spreads windows by screen size (tested with a fake
+      two-screen setup - needs a real multi-monitor try)
 - [ ] 🔬 **M** GNOME (extension needed: no public window-move API)
 
 ## 8. Notifications and monitoring
 
 - [x] **S** Desktop notifications (freedesktop) for crash / kick / launch done / login lost
 - [ ] **M** Richer Discord webhooks: per-account uptime, screenshots, daily summary
-- [ ] **M** Session history: which account played what, for how long (local only)
+- [x] **M** Session history: which account played what, for how long, time played in the last 7 days (local
+      only; sessions from the Roblox log, safe against Cellar restarts re-reading a log)
 - [ ] 🔬 **M** Discord bot / remote control from phone (start/stop/screenshot); careful with security
 
 ## 9. For every Sober user (single account too)
@@ -170,7 +178,9 @@ the real running app was ~450 MB after hours.
 - [x] **M** **Sober settings editor** with plain-language options for the main Sober profile (config.json)
 - [x] **M** **FastFlag editor**: search, allowlist hints, presets (FPS unlock, lighting, textures), import/export
 - [x] **S** FPS unlock / cap for the main Sober profile
-- [ ] **M** Roblox log viewer (Sober's logs): filter, "copy for a bug report" with cookies stripped
+- [x] **M** Roblox log viewer: normal Sober or any account's profile, "What happened" (events + Roblox's own
+      errors; 5,903 of 5,905 "errors" in a measured session were game scripts / engine chatter), search, copy for a
+      bug report with cookies removed
 - [x] **S** Repair tools: clear shader cache, clear Roblox cache, crash dumps, reset Sober settings
 - [ ] **S** Repair: reinstall Roblox files
 - [x] **S** Sober and Roblox version shown in the header

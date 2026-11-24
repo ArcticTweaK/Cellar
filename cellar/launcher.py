@@ -43,7 +43,8 @@ class Launcher:
         self._pulse: Optional[threading.Thread] = None
         # the UI sets this: notify(kind, instance, text) for desktop notifications (called on worker threads)
         self.notify: Callable[[str, Instance, str], None] = lambda kind, inst, text: None
-        self.on_join: Callable[[Instance, int, str], None] = lambda inst, place_id, job: None   # UI: recent/history
+        self.on_join: Callable[[Instance, int, str, float], None] = lambda inst, place_id, job, ts: None  # UI: history
+        self.on_end: Callable[[Instance, float], None] = lambda inst, ts: None      # UI: it left its server
 
     # ------------------------------------------------------------ bookkeeping
     def snapshot(self) -> List[Instance]:
@@ -111,15 +112,16 @@ class Launcher:
             return False
         return self.start_macro_text(inst, m.name, m.text, m.loop, logf)
 
-    def start_macro_text(self, inst: Instance, name: str, text: str, loop: bool, logf: LogF) -> bool:
-        """Also used by the Macros page's Run once (the text as typed, saved or not)."""
+    def start_macro_text(self, inst: Instance, name: str, text: str, loop: bool, logf: LogF,
+                         on_step=None) -> bool:
+        """Also used by the Macros page's Run once / Step by step (the text as typed, saved or not)."""
         who = inst.account.name
         if not inst.screen:
             logf(f"[{who}] macros need background mode (Edit account > Run in the background), then relaunch it.")
             return False
         self.stop_macro(inst)
         try:
-            inst.macro = macros.Runner(inst.screen, name, text, loop, logf, who).start()
+            inst.macro = macros.Runner(inst.screen, name, text, loop, logf, who, on_step).start()
         except ValueError as ex:
             logf(f"[{who}] macro '{name}' has mistakes: {ex}")
             return False
@@ -440,15 +442,20 @@ class Launcher:
                 if ev.kind == "joined":
                     first = not i.place_id
                     if ev.job_id != i.job_id:
-                        self.on_join(i, ev.place_id, ev.job_id)
+                        self.on_join(i, ev.place_id, ev.job_id, ev.ts)
                     i.place_id, i.job_id = ev.place_id, ev.job_id
                     if not first:
                         logf(f"{who} joined another server (place {ev.place_id}).")
+                elif ev.kind == "left":
+                    self.on_end(i, ev.ts)
                 elif ev.kind == "disconnected":
+                    self.on_end(i, ev.ts)
                     text = f"{who} {ev.describe()}."
                     self.notify("kick", i, f"{i.account.name}: {ev.describe()}")
-                    if s.webhook_crash:
-                        webhook.send("Disconnected", f"{i.account.name} — {ev.describe()}.", webhook.RED)
+                    if s.webhook_crash and webhook.enabled():
+                        # its own screen still shows Roblox's message: take it before rejoining replaces it
+                        pic = background.grab_png(i.screen) if s.webhook_screenshot and i.screen else None
+                        webhook.send("Disconnected", f"{i.account.name} — {ev.describe()}.", webhook.RED, image=pic)
                     if not s.rejoin_on_kick:
                         logf(text + " (Turn on 'Rejoin when kicked' in Settings to bring it back by itself.)")
                         continue

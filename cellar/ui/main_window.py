@@ -3,6 +3,7 @@ left, the tools as tabs on the right (Launch first), the log across the bottom."
 
 import os
 import threading
+import time
 from typing import Optional
 
 from PySide6.QtCore import QSize, Qt, QTimer
@@ -11,7 +12,7 @@ from PySide6.QtWidgets import (QAbstractItemView, QApplication, QButtonGroup, QC
                                QLabel, QLineEdit, QMainWindow, QMenu, QPlainTextEdit, QPushButton, QSplitter,
                                QStackedWidget, QSystemTrayIcon, QTabWidget, QToolButton, QVBoxLayout, QWidget)
 
-from .. import APP_NAME, AUTHOR, __version__, log, paths, sober, store, theme, usage
+from .. import APP_NAME, AUTHOR, __version__, log, paths, sessions, sober, store, theme, usage
 from .. import wm
 from ..launcher import Launcher
 from .accounts_model import ACCOUNT_ROLE, AccountFilter, AccountModel
@@ -219,7 +220,14 @@ class MainWindow(AccountsMixin, LaunchMixin, LiveMixin, QMainWindow):
         cv.setSpacing(0)
         cv.addWidget(self._build_header())
         cv.addWidget(body, 1)
-        self.setCentralWidget(central)
+        # the window and its lock screen (password mode: Settings > Security > Lock after)
+        self.root = QStackedWidget()
+        self.root.addWidget(central)
+        self.root.addWidget(self._build_lock())
+        self.setCentralWidget(self.root)
+        self.locked = False
+        self._lock_timer = QTimer(self, singleShot=True, timeout=self.lock)
+        QGuiApplication.instance().applicationStateChanged.connect(self._app_state)
         self.setAcceptDrops(True)
         self.sampler = usage.Sampler()
 
@@ -233,7 +241,8 @@ class MainWindow(AccountsMixin, LaunchMixin, LiveMixin, QMainWindow):
                 view.addAction(a)
         for key, fn in (("F2", self.edit_selected), ("Ctrl+Shift+S", self.stop_all), ("Ctrl+N", self.add_browser),
                         ("Ctrl+A", lambda: self.table.selectAll()), ("Ctrl+Shift+W", self.open_screen_wall),
-                        ("F5", self.presence_tick), ("Ctrl+K", self.open_palette), ("Ctrl+P", self.open_palette)):
+                        ("F5", self.presence_tick), ("Ctrl+K", self.open_palette), ("Ctrl+P", self.open_palette),
+                        ("Ctrl+L", self.lock)):
             self.addAction(QAction(self, shortcut=QKeySequence(key), triggered=fn))
         for n in range(1, 10):          # Ctrl+1 ... Ctrl+9 = the tabs
             self.addAction(QAction(self, shortcut=QKeySequence(f"Ctrl+{n}"),
@@ -257,6 +266,7 @@ class MainWindow(AccountsMixin, LaunchMixin, LiveMixin, QMainWindow):
             tm.addAction("Screen wall", self.open_screen_wall)
             tm.addAction("Stop all", self.stop_all)
             tm.addSeparator()
+            tm.addAction("Lock", self.lock)
             tm.addAction("Quit", self.quit_app)
             self.tray.setContextMenu(tm)
             self.tray.activated.connect(lambda r: self.toggle_visible() if r == QSystemTrayIcon.Trigger else None)
@@ -278,7 +288,8 @@ class MainWindow(AccountsMixin, LaunchMixin, LiveMixin, QMainWindow):
         self.t_logs.start(4000)
         self._logs_busy = False
         self.launcher.notify = lambda kind, inst, text: ui(lambda: self.desktop_notify(kind, text))
-        self.launcher.on_join = lambda inst, place, job: ui(lambda: self.joined(inst, place, job))
+        self.launcher.on_join = lambda inst, place, job, ts: ui(lambda: self.joined(inst, place, job, ts))
+        self.launcher.on_end = lambda inst, ts: ui(lambda: self.session_ended(inst, ts))
         self.t_updates = QTimer(self, timeout=lambda: (self.check_updates(), self.refresh_versions()))  # runs for days
         self.t_updates.start(6 * 3600 * 1000)
         self.restart_timers()
@@ -425,6 +436,83 @@ class MainWindow(AccountsMixin, LaunchMixin, LiveMixin, QMainWindow):
         h.addWidget(self.st_multi, 0, Qt.AlignVCenter)
         return bar
 
+    # ---------------------------------------------------------------- lock (password mode)
+    def _build_lock(self) -> QWidget:
+        w = QWidget()
+        v = QVBoxLayout(w)
+        v.addStretch(2)
+        logo = QLabel()
+        logo.setPixmap(app_icon().pixmap(72, 72))
+        logo.setAlignment(Qt.AlignCenter)
+        v.addWidget(logo)
+        t = QLabel("Cellar is locked")
+        t.setObjectName("brand")
+        t.setAlignment(Qt.AlignCenter)
+        v.addWidget(t)
+        sub = QLabel("Your accounts keep running. Enter the password of your accounts file to see them again.")
+        sub.setObjectName("stat_sub")
+        sub.setAlignment(Qt.AlignCenter)
+        v.addWidget(sub)
+        self.lock_pw = QLineEdit()
+        self.lock_pw.setEchoMode(QLineEdit.Password)
+        self.lock_pw.setPlaceholderText("Password")
+        self.lock_pw.setFixedWidth(320)
+        self.lock_pw.returnPressed.connect(self.unlock)
+        self.lock_err = QLabel("")
+        self.lock_err.setAlignment(Qt.AlignCenter)
+        h = QHBoxLayout()
+        h.addStretch(1)
+        h.addWidget(self.lock_pw)
+        h.addWidget(btn("Unlock", self.unlock, primary=True))
+        h.addStretch(1)
+        v.addLayout(h)
+        v.addWidget(self.lock_err)
+        v.addStretch(3)
+        return w
+
+    def _app_state(self, state):
+        """Count the time in the background: the lock comes after Settings > Security > Lock after."""
+        mins = store.settings.lock_after_min
+        if state == Qt.ApplicationActive or not mins or store.password is None:
+            self._lock_timer.stop()
+        elif not self._lock_timer.isActive():
+            self._lock_timer.start(mins * 60000)
+
+    def lock(self):
+        """Hides the accounts behind the password (password mode only). Running accounts keep running."""
+        if self.locked or store.password is None:
+            if store.password is None and not self.locked:
+                self.toast("Locking needs a password on your accounts file (Settings > Security).", "warn")
+            return
+        from .common import Dialog
+        for d in QApplication.topLevelWidgets():          # Edit account & co. show cookies: close them
+            if isinstance(d, Dialog) and d.isVisible():
+                d.reject()
+        self.locked = True
+        for a in self.actions():                          # F2 / Delete / Ctrl+K would still work behind it
+            a.setEnabled(a.shortcut().toString() == "")
+        self.root.setCurrentIndex(1)
+        self.lock_pw.clear()
+        self.lock_err.setText("")
+        self.lock_pw.setFocus()
+        log.write("Cellar locked (your accounts keep running).")
+
+    def unlock(self):
+        import hmac
+        if not self.locked:
+            return
+        given = self.lock_pw.text()
+        if store.password is None or not hmac.compare_digest(given.encode(), store.password.encode()):
+            self.lock_pw.clear()
+            self.lock_err.setText(theme.span("bad", "That is not the password."))
+            return
+        self.locked = False
+        for a in self.actions():
+            a.setEnabled(True)
+        self.root.setCurrentIndex(0)
+        self.lock_pw.clear()
+        log.write("Cellar unlocked.")
+
     def startup(self):
         s = store.settings
         self.log(f"{APP_NAME} {__version__} by {AUTHOR} - data in {paths.DATA_DIR}")
@@ -449,6 +537,10 @@ class MainWindow(AccountsMixin, LaunchMixin, LiveMixin, QMainWindow):
             self.log("No window control found: the Windows page (layouts) and anti-AFK for normal windows need KDE "
                      "Plasma, Hyprland or Sway.")
         self.launcher.adopt_running(self.log)
+        # sessions of clients that closed while Cellar was not running end when Cellar last quit
+        if sessions.close_missing(s.history, {i.account.id for i in self.launcher.alive_instances()},
+                                  now=s.last_quit or None):
+            store.save_settings()
         if not store.accounts:
             self.log("No accounts yet - use 'Add account' (browser login, cookies, or import from your Sober).")
         if not s.first_run_done:
@@ -515,8 +607,10 @@ class MainWindow(AccountsMixin, LaunchMixin, LiveMixin, QMainWindow):
         store.save_settings()
 
     def restart_app(self):
-        """Starts a fresh Cellar a moment after this one quits (running accounts keep running and are picked up
-        again). The new process inherits this one's environment, so it runs the same way (Nix wrapper, dev shell...)."""
+        """Starts a fresh Cellar once this one has quit (running accounts keep running and are picked up again).
+        The new process inherits this one's environment, so it runs the same way (Nix wrapper, dev shell...).
+        It waits for this process to be gone (at most 15 s): quitting can take seconds while background jobs finish,
+        and two Cellars must never run at once (accounts file, adopting the running clients)."""
         import shlex
         import subprocess
         import sys
@@ -524,7 +618,8 @@ class MainWindow(AccountsMixin, LaunchMixin, LiveMixin, QMainWindow):
         argv = ([sys.executable, "-m", "cellar"] if a0.endswith("__main__.py") or not os.path.isfile(a0)
                 else [sys.executable, a0])
         argv += [x for x in sys.argv[1:] if x == "--minimized"]
-        subprocess.Popen(["sh", "-c", "sleep 1.5; exec " + shlex.join(argv)], cwd=os.getcwd(),
+        wait = f"i=0; while kill -0 {os.getpid()} 2>/dev/null && [ $i -lt 150 ]; do sleep 0.1; i=$((i+1)); done; "
+        subprocess.Popen(["sh", "-c", wait + "exec " + shlex.join(argv)], cwd=os.getcwd(),
                          start_new_session=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         self.hide()                     # hidden: quitting does not ask about the running accounts (they stay)
         self.quit_app()
@@ -580,6 +675,7 @@ class MainWindow(AccountsMixin, LaunchMixin, LiveMixin, QMainWindow):
 
     def quit_app(self):
         self._quitting = True
+        store.settings.last_quit = time.time()
         self.save_geometry()
         for i in self.launcher.snapshot():      # nobody wakes them up once Cellar is gone
             if i.frozen and i.pid:

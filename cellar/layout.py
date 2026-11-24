@@ -110,3 +110,39 @@ def capacity(area: Rect, s: LayoutSettings) -> int:
     c = max(1, (area[2] - 2 * m + gap) // (min_w + gap))
     r = max(1, (area[3] - 2 * m + gap) // (min_h + gap))
     return c * r
+
+
+def share(n: int, areas: List[Rect]) -> List[int]:
+    """How many of n windows go on each screen: by screen size (largest remainder), screens left to right."""
+    if not areas:
+        return []
+    sizes = [max(1, w * h) for _, _, w, h in areas]
+    total = sum(sizes)
+    exact = [n * s / total for s in sizes]
+    counts = [int(e) for e in exact]
+    for i in sorted(range(len(areas)), key=lambda i: -(exact[i] - counts[i]))[:n - sum(counts)]:
+        counts[i] += 1
+    return counts
+
+
+def spread(n: int, areas: List[Rect], s: LayoutSettings) -> Tuple[List[Rect], bool]:
+    """Windows over several screens ("All monitors"): each screen gets its share and its own grid. Screens are
+    filled left to right (then top to bottom), so the order of the windows reads like the screens do."""
+    order = sorted(range(len(areas)), key=lambda i: (areas[i][0], areas[i][1]))
+    counts = share(n, [areas[i] for i in order])
+    rects: List[Rect] = []
+    overlap = False
+    for i, k in zip(order, counts):
+        r, o = compute_rects(k, areas[i], s)
+        rects += r
+        overlap = overlap or o
+    return rects, overlap
+
+
+def bounds(areas: List[Rect]) -> Rect:
+    """The rectangle around all of them (the preview of several screens)."""
+    x0 = min(a[0] for a in areas)
+    y0 = min(a[1] for a in areas)
+    x1 = max(a[0] + a[2] for a in areas)
+    y1 = max(a[1] + a[3] for a in areas)
+    return x0, y0, x1 - x0, y1 - y0

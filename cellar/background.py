@@ -184,8 +184,15 @@ class VNC:
     def __init__(self, path: Path, timeout: float = 5.0):
         self.s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         self.s.settimeout(timeout)
-        self.s.connect(str(path))
         self._send_lock = threading.Lock()
+        try:
+            self._handshake(path)
+        except BaseException:
+            self.s.close()          # a failed connect left the socket open (every retry of a viewer / wall tile)
+            raise
+
+    def _handshake(self, path: Path) -> None:
+        self.s.connect(str(path))
         self._rx(12)
         self.s.sendall(b"RFB 003.008\n")
         types = self._rx(self._rx(1)[0])
@@ -260,6 +267,10 @@ class VNC:
             time.sleep(gap)
 
     # screen
+    def png(self) -> bytes:
+        """The current frame as a PNG (the frame buffer is BGRX)."""
+        return encode_png(bytes(self.fb), self.width, self.height)
+
     def request(self, incremental: bool = True) -> None:
         self._send(struct.pack(">BBHHHH", 3, 1 if incremental else 0, 0, 0, self.width, self.height))
 
@@ -313,3 +324,40 @@ def poke(screen: Screen, action: str) -> bool:
     except Exception as ex:
         log.write(f"background anti-AFK failed: {ex}")
         return False
+
+
+# ---------------------------------------------------------------- screenshots (Discord alerts)
+def encode_png(bgrx: bytes, width: int, height: int) -> bytes:
+    """A BGRX frame (VNC raw, 4 bytes per pixel) -> PNG bytes, without Qt (backend threads use it).
+    1280x720 takes ~0.1 s; zlib level 6 gives ~0.3-1 MB for a game screen."""
+    import zlib
+    rows = bytearray()
+    stride = width * 4
+    rgb = bytearray(width * 3)
+    for y in range(height):
+        line = bgrx[y * stride:(y + 1) * stride]
+        rgb[0::3], rgb[1::3], rgb[2::3] = line[2::4], line[1::4], line[0::4]
+        rows += b"\0" + rgb                # filter type 0 per row
+
+    def chunk(kind: bytes, data: bytes) -> bytes:
+        return struct.pack(">I", len(data)) + kind + data + struct.pack(">I", zlib.crc32(kind + data) & 0xFFFFFFFF)
+    return (b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0))
+            + chunk(b"IDAT", zlib.compress(bytes(rows), 6)) + chunk(b"IEND", b""))
+
+
+def grab_png(screen: "Screen", timeout: float = 4.0) -> Optional[bytes]:
+    """One picture of a background account's screen (None if it can't be reached in time)."""
+    v = None
+    try:
+        v = VNC(screen.vnc, timeout=timeout)
+        v.request(False)
+        end = time.time() + timeout
+        while time.time() < end:
+            if v.read_update():
+                return v.png()
+    except Exception as ex:
+        log.write(f"screenshot for Discord failed: {ex}")
+    finally:
+        if v:
+            v.close()
+    return None

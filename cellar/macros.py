@@ -38,6 +38,17 @@ def _seconds(text: str) -> float:
     return float(m.group(1)) * {"ms": 0.001, "s": 1, None: 1, "m": 60, "min": 60, "h": 3600}[m.group(2)]
 
 
+class _Step(tuple):
+    """(op, args) that also remembers its line in the text (.line) - step-by-step runs show where they are."""
+    line = 0
+
+
+def _at(line: int, op: str, args: tuple) -> "_Step":
+    st = _Step((op, args))
+    st.line = line
+    return st
+
+
 def parse(text: str) -> Tuple[List[Step], List[str]]:
     """Returns (steps, errors). Errors name the line, e.g. 'line 3: unknown key 'spce''.
     Blocks become ('repeat', (n, steps)) and ('random', (steps,)); 'stop after' becomes ('stop_after', (s,))."""
@@ -61,7 +72,7 @@ def parse(text: str) -> Tuple[List[Step], List[str]]:
                 kind, start, body, arg = stack.pop()
                 if not body:
                     raise ValueError(f"the {kind} block from line {start} is empty")
-                stack[-1][2].append((kind, (arg, body) if kind == "repeat" else (body,)))
+                stack[-1][2].append(_at(start, kind, (arg, body) if kind == "repeat" else (body,)))
             elif op == "repeat":
                 if not a or a[-1] != "{":
                     raise ValueError("write it as: repeat 5 {")
@@ -76,21 +87,21 @@ def parse(text: str) -> Tuple[List[Step], List[str]]:
             elif op == "stop":
                 if not a or a[0].lower() != "after":
                     raise ValueError("write it as: stop after 30m")
-                steps.append(("stop_after", (_seconds(" ".join(a[1:])),)))
+                steps.append(_at(i, "stop_after", (_seconds(" ".join(a[1:])),)))
             elif op in ("tap", "down", "up"):
-                steps.append((op, (background.keysym(rest),)))
+                steps.append(_at(i, op, (background.keysym(rest),)))
             elif op == "key":
-                steps.append(("key", (background.keysym(a[0]), int(a[1]) if len(a) > 1 else 100)))
+                steps.append(_at(i, "key", (background.keysym(a[0]), int(a[1]) if len(a) > 1 else 100)))
             elif op == "type":
-                steps.append(("type", (rest,)))
+                steps.append(_at(i, "type", (rest,)))
             elif op in ("click", "rclick", "move"):
-                steps.append((op, (int(a[0]), int(a[1]))))
+                steps.append(_at(i, op, (int(a[0]), int(a[1]))))
             elif op == "scroll":
-                steps.append(("scroll", (a[0].lower() == "up", int(a[1]) if len(a) > 1 else background.W // 2,
+                steps.append(_at(i, "scroll", (a[0].lower() == "up", int(a[1]) if len(a) > 1 else background.W // 2,
                                          int(a[2]) if len(a) > 2 else background.H // 2)))
             elif op == "wait":
                 lo, _, hi = a[0].partition("-")
-                steps.append(("wait", (int(lo), int(hi) if hi else int(lo))))
+                steps.append(_at(i, "wait", (int(lo), int(hi) if hi else int(lo))))
             else:
                 raise ValueError(f"unknown step '{op}'")
         except (IndexError, ValueError) as ex:
@@ -128,8 +139,12 @@ class Runner:
     """Runs one macro for one account in its own thread until it ends or stop() is called."""
 
     def __init__(self, screen: background.Screen, name: str, text: str, loop: bool,
-                 logf: Callable[[str], None], who: str):
+                 logf: Callable[[str], None], who: str, on_step: Optional[Callable[[int, str], None]] = None):
+        """on_step: step by step - before each step on_step(line, what) is called (worker thread) and the step
+        waits for next_step(); waits are skipped (you click through anyway)."""
         self.screen, self.name, self.loop, self.logf, self.who = screen, name, loop, logf, who
+        self.on_step = on_step
+        self._gate = threading.Event()
         self.steps, errors = parse(text)
         if errors:
             raise ValueError("; ".join(errors))
@@ -146,6 +161,23 @@ class Runner:
 
     def stop(self) -> None:
         self._stop.set()
+        self._gate.set()
+
+    def next_step(self) -> None:
+        """Step by step: do the step shown now."""
+        self._gate.set()
+
+    def _hold(self, st) -> bool:
+        """Step by step: show this step and wait for next_step(). False = stopped meanwhile."""
+        if self.on_step is None:
+            return True
+        op, args = st
+        self.on_step(getattr(st, "line", 0), f"{op} {' '.join(str(a) for a in args)}".strip())
+        while not self._gate.wait(0.2):
+            if self._stop.is_set():
+                return False
+        self._gate.clear()
+        return not self._stop.is_set()
 
     @property
     def running(self) -> bool:
@@ -164,8 +196,11 @@ class Runner:
 
     def _exec(self, v, steps: List[Step], held: set) -> bool:
         """Runs steps (blocks recursively). False = stopped."""
-        for op, args in steps:
+        for st in steps:
+            op, args = st
             if self._expired():
+                return False
+            if op not in ("repeat", "random", "stop_after") and not self._hold(st):
                 return False
             if op == "repeat":
                 for _ in range(args[0]):
@@ -203,7 +238,7 @@ class Runner:
             elif op == "scroll":
                 v.scroll(args[1], args[2], args[0])
             elif op == "wait":
-                if self._sleep(random.randint(args[0], args[1])):
+                if self.on_step is None and self._sleep(random.randint(args[0], args[1])):
                     return False
         return True
 

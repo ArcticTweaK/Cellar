@@ -26,7 +26,8 @@ _TELEPORT = "[FLog::SingleSurfaceApp] initiateTeleport"
 _LEAVE = "[FLog::SingleSurfaceApp] leaveUGCGameInternal"
 
 REASONS = {267: "kicked by the game", 268: "kicked (unexpected client behaviour)", 273: "logged in somewhere else",
-           277: "lost connection", 278: "kicked for being idle", 279: "could not connect", 529: "Roblox had a problem"}
+           277: "lost connection", 278: "kicked for being idle", 279: "could not connect",
+           285: "left the game (the client said goodbye)", 529: "Roblox had a problem"}
 
 
 @dataclass
@@ -35,12 +36,22 @@ class Event:
     place_id: int = 0
     job_id: str = ""
     reason: int = 0
+    ts: float = 0.0             # when (unix time, from the log line); 0 = unknown
 
     def describe(self) -> str:
         if self.kind == "disconnected":
             why = REASONS.get(self.reason, f"error {self.reason}" if self.reason else "disconnected")
             return why[0].upper() + why[1:]
         return self.kind
+
+
+def line_time(line: str) -> float:
+    """Unix time of a Roblox log line ("2026-11-24T20:16:14.294Z,..." - UTC); 0 if it has none."""
+    from datetime import datetime, timezone
+    try:
+        return datetime.strptime(line[:19], "%Y-%m-%dT%H:%M:%S").replace(tzinfo=timezone.utc).timestamp()
+    except ValueError:
+        return 0.0
 
 
 @dataclass
@@ -89,6 +100,12 @@ class Tail:
         return out
 
     def _line(self, line: str) -> Optional[Event]:
+        ev = self._event(line)
+        if ev is not None:
+            ev.ts = line_time(line)
+        return ev
+
+    def _event(self, line: str) -> Optional[Event]:
         m = _JOIN.search(line)
         if m:
             self.job_id, self.place_id = m.group(1).lower(), int(m.group(2))
@@ -138,6 +155,98 @@ class Watcher:
 
 def logs_folder(app: Path) -> Path:
     return app / "data" / "sober" / "appData" / "logs"
+
+
+# ---------------------------------------------------------------- reading a whole log (the Roblox logs window)
+# "2026-11-24T20:16:14.294Z,39.29,4256b6c0,6,Error [DFLog::AssetProvider] text" - the severity is missing on some
+# lines ("...,6 [FLog::Output] ! Joining game ..."). Times are UTC.
+_LINE = re.compile(r"^(\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d+)?)Z,[\d.]+,[0-9a-fA-F]+,\d+(?:,(\w+))?\s+(.*)$")
+_SOBER = re.compile(r"^(info|warn|warning|error|debug|trace):\s*(.*)$", re.I)
+# Roblox calls its own startup notes "Critical" (memory allocator settings, build id): those are not problems
+_SEVERITY = {"error": "error", "fatal": "error", "warning": "warning", "warn": "warning"}
+# Measured on a 9,312-line session: 5,905 "Error" lines, all but 2 from these - the engine's animation chatter,
+# the game's own scripts, asset downloads and cache housekeeping. Not something a player (or Cellar) can fix.
+NOISE = ("[DFLog::SlimRendererAnimation]", "[FLog::CreatorError]", "[DFLog::AssetProvider]",
+         "[DFLog::SQLite] Database::walCheckpoint")      # Roblox's own cache database housekeeping
+
+
+@dataclass
+class LogLine:
+    time: str                   # local HH:MM:SS ("" when the line has none)
+    severity: str               # error | warning | info
+    text: str                   # the line without its time / thread prefix
+    event: str = ""             # what happened, in plain words (joins, teleports, leaves, disconnects)
+    noise: bool = False         # a NOISE channel (the game's own errors, engine chatter)
+
+    @property
+    def worth_showing(self) -> bool:
+        """'What happened': events and errors of Roblox / Sober themselves."""
+        return bool(self.event) or (self.severity == "error" and not self.noise)
+
+
+def _local_time(iso: str) -> str:
+    from datetime import datetime, timezone
+    try:
+        return datetime.fromisoformat(iso).replace(tzinfo=timezone.utc).astimezone().strftime("%H:%M:%S")
+    except ValueError:
+        return ""
+
+
+def parse_line(raw: str) -> Optional[LogLine]:
+    raw = raw.rstrip("\r\n")
+    if not raw.strip():
+        return None
+    m = _LINE.match(raw)
+    if m:
+        sev = _SEVERITY.get((m.group(2) or "").lower(), "info")
+        text = m.group(3)
+        ln = LogLine(_local_time(m.group(1)), sev, text, noise=text.startswith(NOISE))
+        j = _JOIN.search(text)
+        if j:
+            ln.event = f"Joined place {j.group(2)} (server {j.group(1)[:8]}...)"
+        elif _TELEPORT in text:
+            ln.event = "Teleporting to another place"
+        elif _LEAVE in text:
+            ln.event = "Left the game"
+        elif _DISCONNECT in text:
+            ln.event = "Disconnected from the server"
+        elif "disconnect" in text.lower() and _REASON.search(text):
+            code = int(_REASON.search(text).group(1))
+            ln.event = f"Disconnect reason {code}: {REASONS.get(code, 'see Roblox error codes')}"
+        return ln
+    s = _SOBER.match(raw)                   # Sober's own log
+    if s:
+        return LogLine("", _SEVERITY.get(s.group(1).lower(), "info"), s.group(2))
+    return LogLine("", "info", raw)         # a continuation line (stack traces...)
+
+
+def log_files(app: Path) -> List[tuple]:
+    """(label, path) of every Roblox log (newest first), then Sober's own logs, in one Sober folder."""
+    from datetime import datetime
+    out = []
+    for kind, folder in (("Roblox", logs_folder(app)), ("Sober", app / "data" / "sober" / "sober_logs")):
+        try:
+            files = sorted((f for f in folder.glob("*.log") if f.is_file()), key=lambda f: -f.stat().st_mtime)
+        except OSError:
+            continue
+        for f in files:
+            st = f.stat()
+            when = datetime.fromtimestamp(st.st_mtime).strftime("%a %d %b %H:%M")
+            out.append((f"{kind} log - {when} ({st.st_size / 1024:.0f} KB)", f))
+    return out
+
+
+MAX_LINES = 30000                   # a long session writes 100k+ lines; the newest ones are the interesting ones
+
+
+def read_log(path: Path) -> tuple:
+    """Worker: (lines, total) - the newest MAX_LINES parsed lines and how many the file has."""
+    try:
+        raw = path.read_text(errors="replace").splitlines()
+    except OSError:
+        return [], 0
+    lines = [ln for ln in (parse_line(r) for r in raw[-MAX_LINES:]) if ln]
+    return lines, len(raw)
 
 
 def available(app: Path) -> bool:

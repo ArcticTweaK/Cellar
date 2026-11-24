@@ -47,6 +47,11 @@ def commands(mw) -> List[Command]:
     out += [("Add account (browser login)", "accounts", mw.add_browser),
             ("Screen wall", "background", mw.open_screen_wall),
             ("Anti-AFK now", "accounts", mw.anti_afk_now),
+            ("Lock Cellar now (password)", "app", mw.lock),
+            ("History: sessions and time played", "app", lambda: mw.open_history(
+                (mw.selected_accounts() or [None])[0])),
+            ("Roblox logs (what happened, errors)", "app", lambda: mw.open_roblox_log(
+                (mw.selected_accounts() or [None])[0])),
             ("Check for updates", "app", lambda: mw.check_updates(manual=True)),
             ("System check", "app", mw.settings_page.system_check),
             ("Run setup again", "app", mw.run_setup),

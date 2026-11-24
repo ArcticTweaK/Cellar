@@ -10,6 +10,7 @@ from PySide6.QtWidgets import (QAbstractItemView, QComboBox, QHBoxLayout, QHeade
 
 from .. import layout, sober, store, theme, util
 from ..kwin import Screen, Win
+from ..models import NamedLayout, clone
 from .common import btn, chk, combo, group, hint, row, spin
 
 
@@ -82,6 +83,12 @@ class WindowsPage(QWidget):
         lv.addWidget(self.no_kwin)
 
         g, f = group("Grid")
+        self.saved = QComboBox()
+        self.saved.setToolTip("Layouts you saved: pick one to use it (its grid, monitor and window options)")
+        self.saved.activated.connect(self._use_saved)
+        f.addRow("Saved layouts", row(self.saved, btn("Save as...", self._save_layout,
+                                                      tip="Keep the settings below under a name"),
+                                      btn("Delete", self._delete_layout), stretch=False))
         self.monitor = QComboBox()
         self.monitor.currentIndexChanged.connect(lambda *_: self._set("monitor", self.monitor.currentData() or ""))
         f.addRow("Monitor", self.monitor)
@@ -158,6 +165,7 @@ class WindowsPage(QWidget):
         split.setStretchFactor(0, 0)
         split.setStretchFactor(1, 1)
         self._mode_ui()
+        self._fill_saved()
 
     # ------------------------------------------------------------ settings
     def _set(self, attr, value):
@@ -176,6 +184,46 @@ class WindowsPage(QWidget):
         self.fh.setEnabled(m == "FixedSize")
         self.scale.setEnabled(m != "FixedSize")
         self.stretch.setEnabled(m != "FixedSize")
+
+    # ------------------------------------------------------------ saved layouts
+    def _fill_saved(self, select: str = ""):
+        self.saved.clear()
+        self.saved.addItem("(pick one)" if store.settings.saved_layouts else "(none yet - Save as...)", "")
+        for n in store.settings.saved_layouts:
+            self.saved.addItem(n.name, n.name)
+        self.saved.setCurrentIndex(max(0, self.saved.findData(select)))
+
+    def _use_saved(self, i: int):
+        name = self.saved.itemData(i)
+        n = next((x for x in store.settings.saved_layouts if x.name == name), None)
+        if n is None:
+            return
+        store.settings.layout = clone(n.layout)
+        store.save_settings()
+        self.load()
+        self.mw.log(f"Window layout '{name}' - press Arrange now to use it on the open windows.")
+
+    def _save_layout(self):
+        from PySide6.QtWidgets import QInputDialog
+        cur = self.saved.currentData() or ""
+        name, ok = QInputDialog.getText(self, "Save layout", "A name for this layout:",
+                                        text=cur or f"Layout {len(store.settings.saved_layouts) + 1}")
+        name = name.strip()
+        if not ok or not name:
+            return
+        keep = [x for x in store.settings.saved_layouts if x.name != name]
+        store.settings.saved_layouts = keep + [NamedLayout(name, clone(store.settings.layout))]
+        store.save_settings()
+        self._fill_saved(name)
+        self.mw.log(f"Saved window layout '{name}'.")
+
+    def _delete_layout(self):
+        name = self.saved.currentData()
+        if not name:
+            return
+        store.settings.saved_layouts = [x for x in store.settings.saved_layouts if x.name != name]
+        store.save_settings()
+        self._fill_saved()
 
     def load(self):
         """Puts the settings back into the widgets (after a preset was applied)."""
@@ -219,6 +267,20 @@ class WindowsPage(QWidget):
         full = (s.x, s.y, s.w, s.h)
         return full, ((s.wx, s.wy, s.ww, s.wh) if store.settings.layout.use_work_area else full)
 
+    def areas(self):
+        """[(full, usable)] of every screen windows go on: all of them for "All monitors", else the one."""
+        if store.settings.layout.monitor != "*" or len(self.screens) < 2:
+            return [self.area()]
+        work = store.settings.layout.use_work_area
+        return [((s.x, s.y, s.w, s.h), (s.wx, s.wy, s.ww, s.wh) if work else (s.x, s.y, s.w, s.h))
+                for s in self.screens]
+
+    def compute(self, n: int):
+        """(rects, overlap) for n windows on the chosen screen(s)."""
+        areas = [a for _, a in self.areas()]
+        L = store.settings.layout
+        return layout.spread(n, areas, L) if len(areas) > 1 else layout.compute_rects(n, areas[0], L)
+
     def ordered(self) -> List[Win]:
         """Sober windows in grid order (only the ones in the grid)."""
         wins = [w for w in self.wins if self.key_of(w) not in self.excluded]
@@ -251,6 +313,8 @@ class WindowsPage(QWidget):
             self._loading = True
             self.monitor.clear()
             self.monitor.addItem("The screen I am using", "")
+            if len(scr) > 1:
+                self.monitor.addItem(f"All monitors - spread out ({len(scr)} screens)", "*")
             for s in scr:
                 self.monitor.addItem(s.label, s.name)
             i = self.monitor.findData(store.settings.layout.monitor)
@@ -285,9 +349,14 @@ class WindowsPage(QWidget):
             if w.id in sel:
                 it.setSelected(True)
         self._loading = False
-        n = len(self.wins)
-        cap = layout.capacity(self.area()[1], store.settings.layout)
-        self.info.setText(f"{n} Sober window(s). Room for about {cap} windows of the smallest size on this monitor without overlap.")
+        self._info()
+
+    def _info(self):
+        many = self.areas()
+        cap = sum(layout.capacity(a, store.settings.layout) for _, a in many)
+        where = "these monitors" if len(many) > 1 else "this monitor"
+        self.info.setText(f"{len(self.wins)} Sober window(s). Room for about {cap} windows of the smallest size on "
+                          f"{where} without overlap.")
 
     def _item_changed(self, it, col):
         if self._loading or col != 0:
@@ -303,10 +372,12 @@ class WindowsPage(QWidget):
         self.update_preview()
 
     def update_preview(self):
-        full, area = self.area()
+        many = self.areas()
+        full, area = layout.bounds([f for f, _ in many]), layout.bounds([a for _, a in many])
         grid = self.ordered()
-        n = max(1, len(grid)) if grid else 4
-        rects, overlap = layout.compute_rects(n, area, store.settings.layout)
+        n = max(1, len(grid)) if grid else (4 * len(many))
+        rects, overlap = self.compute(n)
+        self._info()
         labels = []
         for i in range(len(rects)):
             if i < len(grid):
@@ -333,7 +404,7 @@ class WindowsPage(QWidget):
             self._fill_tree()
             return
         L = store.settings.layout
-        rects, overlap = layout.compute_rects(len(grid), self.area()[1], L)
+        rects, overlap = self.compute(len(grid))
         items = []
         for w, (x, y, ww, hh) in zip(grid, rects):
             items.append({"id": w.id, "x": x, "y": y, "w": ww, "h": hh, "noBorder": L.borderless,

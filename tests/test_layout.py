@@ -33,3 +33,26 @@ class Layout(unittest.TestCase):
 
     def test_capacity(self):
         self.assertGreaterEqual(layout.capacity(self.area, LayoutSettings()), 1)
+
+
+class Spread(unittest.TestCase):
+    def test_share_by_size(self):
+        big, small = (0, 0, 2560, 1440), (2560, 0, 1920, 1080)
+        self.assertEqual(sum(layout.share(10, [big, small])), 10)
+        self.assertEqual(layout.share(10, [big, small]), [6, 4])          # 3.7 M vs 2.1 M pixels
+        self.assertEqual(layout.share(1, [big, small]), [1, 0])
+        self.assertEqual(layout.share(0, [big, small]), [0, 0])
+
+    def test_spread_stays_on_each_screen(self):
+        from cellar.models import LayoutSettings
+        left, right = (0, 0, 1920, 1080), (1920, 0, 1920, 1080)
+        rects, overlap = layout.spread(8, [right, left], LayoutSettings())      # given in any order
+        self.assertEqual(len(rects), 8)
+        self.assertFalse(overlap)
+        first, second = rects[:4], rects[4:]
+        self.assertTrue(all(x + w <= 1920 for x, _, w, _ in first))         # left screen first
+        self.assertTrue(all(x >= 1920 and x + w <= 3840 for x, _, w, _ in second))
+
+    def test_bounds(self):
+        self.assertEqual(layout.bounds([(0, 0, 1920, 1080), (1920, -200, 2560, 1440)]), (0, -200, 4480, 1440))
+

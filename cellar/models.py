@@ -179,12 +179,13 @@ class PrivateServer:
 
 @dataclass
 class JoinRecord:
-    """One server an account joined (from its Roblox log) - Launch > Server > History."""
+    """One session: an account in one server (from its Roblox log) - History (sessions.py)."""
     ts: float = 0.0
     account_id: str = ""
     account: str = ""
     place_id: int = 0
     job_id: str = ""
+    end: float = 0.0            # when it left that server; 0 = still there (or unknown: from before 1.1)
 
 
 @dataclass
@@ -226,6 +227,13 @@ class PresetEntry:
     h: int = 0
     borderless: bool = False
     minimized: bool = False
+
+
+@dataclass
+class NamedLayout:
+    """A window layout kept under a name (Windows tab > Saved layouts) - apart from presets."""
+    name: str = ""
+    layout: LayoutSettings = field(default_factory=LayoutSettings)
 
 
 @dataclass
@@ -329,7 +337,7 @@ class AppSettings:
     # Alt defaults, measured 2026-11-23 on an i5-12600K: an alt in a game takes 0.82 CPU cores at
     # 240 FPS / default graphics and 0.17 at 30 FPS / "Lowest" - RAM (~1 GB each) becomes the limit.
     fps_cap: int = 30               # 0 = leave Roblox's own setting alone; accounts marked full_quality skip it
-    settings_version: int = 3       # 2 = alt performance defaults, 3 = MultiHub layout (see store.load_settings)
+    settings_version: int = 4       # 2 = alt defaults, 3 = MultiHub layout, 4 = sessions (see store.load_settings)
     auto_relaunch: bool = False
     watcher_sec: int = 60
     watcher_use_presence: bool = False
@@ -349,9 +357,12 @@ class AppSettings:
     use_saved_per_account: bool = True
     groups: List[str] = field(default_factory=list)
     recent: List[GameEntry] = field(default_factory=list)
-    history: List[JoinRecord] = field(default_factory=list)     # newest first, last 300
+    history: List[JoinRecord] = field(default_factory=list)     # sessions, newest first (sessions.KEEP)
+    last_quit: float = 0.0          # when Cellar last quit (sessions of clients that closed meanwhile end there)
+    lock_after_min: int = 0         # password mode: lock the window after this long in the background (0 = never)
     private_servers: List[PrivateServer] = field(default_factory=list)
     layout: LayoutSettings = field(default_factory=LayoutSettings)
+    saved_layouts: List[NamedLayout] = field(default_factory=list)
     presets: List[Preset] = field(default_factory=list)
     macros: List[Macro] = field(default_factory=lambda: [Macro(
         name="Stay active (example)", loop=True,
@@ -392,6 +403,7 @@ class AppSettings:
     webhook_relaunch: bool = True
     webhook_batch: bool = True
     webhook_locked: bool = True
+    webhook_screenshot: bool = True     # background accounts: a picture of their screen with "Disconnected"
     keep_profiles_updated: bool = True   # refresh each profile's Roblox files from your main Sober when it updates
 
 

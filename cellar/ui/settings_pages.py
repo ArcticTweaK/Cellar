@@ -122,6 +122,13 @@ def scrolled(w: QWidget) -> QScrollArea:
     return s
 
 
+def _follows(master, widgets) -> None:
+    """Options that only matter while `master` is ticked are greyed out otherwise."""
+    for w in widgets:
+        w.setEnabled(master.isChecked())
+    master.toggled.connect(lambda on: [w.setEnabled(on) for w in widgets])
+
+
 class _Bound:
     """Widgets bound to settings attributes, re-loadable after a preset changed the settings."""
 
@@ -180,15 +187,9 @@ class PerfPage(QWidget, _Bound):
         self.mw = mw
         inner = QWidget()
         v = QVBoxLayout(inner)
-        v.addWidget(hint("Everything here is written into each account's own Sober profile right before it "
-                         "launches, so already running windows keep their settings until relaunched "
-                         "(CPU priority / RAM cap can be applied to running windows)."))
-
-        v.addWidget(hint("<b>The FPS cap and graphics preset below are for your alts.</b> Accounts marked "
-                         "<i>Full quality - this is my main</i> (Edit account) skip both. Measured on this kind of "
-                         "PC: an alt in a game takes 0.82 CPU cores at 240 FPS with Roblox's default graphics, and "
-                         "0.17 at 30 FPS with the Lowest preset. About 1 GB of RAM each either way, so RAM sets "
-                         "how many alts fit. OpenGL used about 35% less graphics memory per alt than Vulkan."))
+        v.addWidget(hint("<b>How your alts run.</b> Accounts marked <i>Full quality - this is my main</i> (Edit "
+                         "account) skip the FPS cap and graphics. Written into each account's own Sober when it "
+                         "launches - running windows keep theirs until relaunched."))
         g, f = group("Last hour - everything Cellar runs for your accounts")
         from .widgets import UsageGraph
         self.g_cpu = UsageGraph("CPU", lambda v: f"{v:.0f}%", floor=5)
@@ -200,7 +201,11 @@ class PerfPage(QWidget, _Bound):
         g, f = group("Frame rate (alts)")
         f.addRow("FPS cap", self.bind(spin(0, 1000, S().fps_cap, special="same as my normal Sober",
                                            tip="Roblox's own 'Maximum frame rate' (FramerateCap), per profile. "
-                                               "Accounts can have their own cap (Edit account)."), S, "fps_cap"))
+                                               "Accounts can have their own cap (Edit account).\n\nMeasured: an alt "
+                                               "in a game takes 0.82 CPU cores at 240 FPS with Roblox's default "
+                                               "graphics, and 0.17 at 30 FPS with the Lowest preset. About 1 GB of "
+                                               "RAM each either way, so RAM sets how many alts fit. OpenGL used "
+                                               "about 35% less graphics memory per alt than Vulkan."), S, "fps_cap"))
         v.addWidget(g)
 
         g, f = group("Roblox graphics for alts (Fast Flags)")
@@ -225,7 +230,7 @@ class PerfPage(QWidget, _Bound):
         f.addRow("Your own flags", self.custom)
         f.addRow(self.bind(chk("Also write flags that are not on Roblox's allowlist (Roblox ignores them)",
                                G().write_unlisted), G, "write_unlisted"))
-        f.addRow(btn("Preview what will be written", self.preview_flags))
+        f.addRow(row(btn("Preview what will be written", self.preview_flags)))
         v.addWidget(g)
 
         g, f = group("Sober options")
@@ -249,12 +254,13 @@ class PerfPage(QWidget, _Bound):
                                                         tip="Soft memory limit (systemd MemoryHigh) of each Sober window. "
                                                             "Above it the kernel reclaims that window's memory first."),
                                                    S, "ram_cap_mb"))
-        f.addRow(btn("Apply to running windows", lambda: bg(self.mw.launcher.apply_limits_all, self.mw.log)))
-        f.addRow("Wait before launching", self.bind(spin(0, 65536, S().min_free_ram_mb, suffix=" MB free",
+        f.addRow(row(btn("Apply priority and limit to running windows",
+                         lambda: bg(self.mw.launcher.apply_limits_all, self.mw.log))))
+        f.addRow("Before each launch, wait until", self.bind(spin(0, 65536, S().min_free_ram_mb, suffix=" MB free",
                                                          special="off", tip="Before each account starts, wait (up to 3 "
                                                          "minutes) until at least this much memory is free."),
                                                     S, "min_free_ram_mb"))
-        f.addRow("Close alts below", self.bind(spin(0, 65536, S().low_ram_close_mb, suffix=" MB free", special="off",
+        f.addRow("Close the newest alt below", self.bind(spin(0, 65536, S().low_ram_close_mb, suffix=" MB free", special="off",
                                                     tip="When free memory drops below this, the most recently "
                                                         "started alt is closed (never an account marked Full "
                                                         "quality) - before Linux's out-of-memory killer picks "
@@ -395,8 +401,8 @@ class SettingsPage(QWidget, _Bound):
         self.accent_btn = btn("Pick a colour...", self._pick_accent)
         self.accent_reset = btn("Theme's own", self._reset_accent)
         self.accent_reset.setVisible(bool(S().accent))
-        f.addRow("Accent", row(self.accent_btn, self.accent_reset,
-                               hint("Your own colour for buttons, tabs and highlights, on any theme except System.")))
+        f.addRow("Accent", row(self.accent_btn, self.accent_reset))
+        f.addRow(hint("Your own colour for buttons, tabs and highlights, on any theme except System."))
         auto = int(round(S().auto_scale * 100))
         self.size = combo([("auto", f"Auto ({auto}% on this screen)"), ("90", "90% - compact"), ("100", "100%"),
                            ("115", "115%"), ("130", "130% - large"), ("150", "150% - extra large")], S().ui_scale)
@@ -435,7 +441,9 @@ class SettingsPage(QWidget, _Bound):
         f.addRow(self.bind(chk("Get a fresh cookie before every launch (signs the account out elsewhere)",
                                S().refresh_cookie_on_launch), S, "refresh_cookie_on_launch"))
         self.plurl = self.bind(QLineEdit(S().place_launcher_url), S, "place_launcher_url")
-        f.addRow("PlaceLauncher URL", self.plurl)
+        self.plurl.setToolTip("The Roblox address accounts join games through (PlaceLauncher). Leave it as it is "
+                              "unless Roblox changes it or a fix tells you to.")
+        f.addRow("Join address (advanced)", self.plurl)
         v.addWidget(g)
 
         g, f = group("Sound")
@@ -458,24 +466,39 @@ class SettingsPage(QWidget, _Bound):
         v.addWidget(g)
 
         g, f = group("Desktop notifications")
-        f.addRow(self.bind(chk("Show desktop notifications", S().notify), S, "notify"))
+        master = self.bind(chk("Show desktop notifications", S().notify), S, "notify")
+        f.addRow(master)
+        kids = []
         for attr, text in (("notify_kick", "An account was kicked or lost its connection"),
                            ("notify_crash", "A Roblox window closed unexpectedly"),
                            ("notify_login_lost", "Roblox signed an account out"),
                            ("notify_launch_done", "A launch sequence finished"),
                            ("notify_friends", "A friend comes online or starts a game (friends of your main account)")):
-            f.addRow(self.bind(chk(text, getattr(S(), attr)), S, attr))
+            kids.append(self.bind(chk(text, getattr(S(), attr)), S, attr))
+            f.addRow(kids[-1])
+        _follows(master, kids)
         v.addWidget(g)
 
         g, f = group("Discord webhook alerts")
-        f.addRow(self.bind(chk("Send alerts to a Discord channel", S().webhook), S, "webhook"))
+        master = self.bind(chk("Send alerts to a Discord channel", S().webhook), S, "webhook")
+        f.addRow(master)
+        kids = []
         self.wh_url = self.bind(QLineEdit(S().webhook_url), S, "webhook_url")
         self.wh_url.setEchoMode(QLineEdit.PasswordEchoOnEdit)
         self.wh_url.setPlaceholderText("https://discord.com/api/webhooks/...")
-        f.addRow("Webhook URL", row(self.wh_url, btn("Test", self.test_webhook), stretch=False))
+        wh_row = row(self.wh_url, btn("Test", self.test_webhook), stretch=False)
+        kids.append(wh_row)
+        f.addRow("Webhook URL", wh_row)
         for attr, text in (("webhook_crash", "A window closed unexpectedly"), ("webhook_relaunch", "The watcher relaunched a window"),
                            ("webhook_batch", "A launch sequence finished"), ("webhook_locked", "An account came back locked")):
-            f.addRow(self.bind(chk(text, getattr(S(), attr)), S, attr))
+            kids.append(self.bind(chk(text, getattr(S(), attr)), S, attr))
+            f.addRow(kids[-1])
+        kids.append(self.bind(chk("Add a picture of the account's screen when it is disconnected (background accounts)",
+                               S().webhook_screenshot, tip="Shows Roblox's own kick / disconnect message. Only background "
+                               "accounts have a screen Cellar can see (Wayland lets no app capture other windows)."),
+                              S, "webhook_screenshot"))
+        f.addRow(kids[-1])
+        _follows(master, kids)
         v.addWidget(g)
 
         g, f = group("Security")
@@ -483,6 +506,12 @@ class SettingsPage(QWidget, _Bound):
         self.enc.setWordWrap(True)
         f.addRow(self.enc)
         f.addRow(row(btn("Set / change password...", self.set_password), btn("Use keyring (no password)", self.remove_password)))
+        self.lock_min = self.bind(spin(0, 600, S().lock_after_min, suffix=" min", special="never",
+                                       tip="With a password on your accounts file: after this long in the background "
+                                           "Cellar hides your accounts until you type it again (your accounts keep "
+                                           "running). Ctrl+L or the tray menu locks right away."),
+                                  S, "lock_after_min")
+        f.addRow("Lock after", row(self.lock_min, QLabel("in the background (password only)")))
         v.addWidget(g)
 
         g, f = group("App")
@@ -701,7 +730,10 @@ links back to Sober.</p>
 <h3>My Sober</h3>
 <p>Settings for your <b>normal</b> Sober (the one in your app menu), useful even with one account: renderer,
 FPS cap and Sober's options in plain language, a Fast Flags editor (the last column shows which flags Roblox
-really uses - it ignores flags that are not on its allowlist), and repair tools that clear caches and crash dumps.
+really uses - it ignores flags that are not on its allowlist), repair tools that clear caches and crash dumps, and
+<b>Roblox logs</b>: what happened in your last sessions (joined, left, disconnected and why, and the errors of
+Roblox and Sober themselves - not the thousands of game-script lines) with <b>Copy for a bug report</b> (cookies
+removed). Right-click an account &gt; <b>Roblox log</b> shows that account's own.
 Your accounts' own profiles are set in the <b>Performance</b> tab.</p>
 
 <h3>Account switcher</h3>
@@ -713,7 +745,8 @@ first. The account Sober was using is added to Cellar if it is not there yet, so
 mouse and keyboard: nothing shows on your desktop and nothing takes your focus. Right-click it &gt;
 <b>View screen</b> to watch it, control it, record a macro or take a screenshot (saved in Pictures/Cellar). Macros are plain text
 (Macros tab) and run per account, so one account can farm while another does something else; <b>Export</b> /
-<b>Import</b> share them as .txt files. Needs <tt>sway</tt> and <tt>wayvnc</tt>.</p>
+<b>Import</b> share them as .txt files. <b>Step by step</b> runs a macro one line at a time on the selected
+account (the line is highlighted; <b>Next step</b> or F10 does it) - the way to find out why a macro misses. Needs <tt>sway</tt> and <tt>wayvnc</tt>.</p>
 
 <h3>Screen wall and freezing</h3>
 <p><b>Screen wall</b> (Windows, tray menu, Ctrl+Shift+W or right-click a background account) shows every background
@@ -726,12 +759,15 @@ but Roblox drops it from the server after a while. The Usage column shows what e
 <p>Cellar reads each running account's own Roblox log, so a kick or lost connection is noticed within seconds.
 It shows a desktop notification, and with Anti-AFK &amp; rejoin &gt; <b>Rejoin right away when an
 account is kicked</b> it comes back by itself - into the same server after a lost connection. Which notifications you get
-is set in Settings &gt; Desktop notifications.</p>
+is set in Settings &gt; Desktop notifications. Discord alerts (Settings &gt; Discord webhook alerts) of a
+background account come with a picture of its screen, so you see Roblox's own message.</p>
 
 <h3>Windows</h3>
 <p>On Wayland only the compositor may move windows, so layouts go through it: KWin scripts on KDE Plasma,
 <tt>hyprctl</tt> on Hyprland and <tt>swaymsg</tt> on Sway (there the windows are made floating first).
-Pick a monitor, a grid mode and press <b>Arrange now</b>, or let new windows be arranged automatically.</p>
+Pick a monitor, a grid mode and press <b>Arrange now</b>, or let new windows be arranged automatically. With
+more than one screen, <b>All monitors</b> shares the windows out by screen size, each screen with its own grid.
+<b>Saved layouts</b> keeps a setup under a name (grid, monitor, borderless...) to switch back in one click.</p>
 
 <h3>Alts and performance</h3>
 <p>The <b>Performance</b> tab: FPS cap, graphics Fast Flags and Sober options are written into each
@@ -754,6 +790,12 @@ press through <tt>ydotool</tt>; then your window gets the focus back.</p>
 <ul>
 <li>Right-click an account &gt; <b>Bring accounts to its server</b>: the selected accounts, a group or everyone
 join the exact server that account is in.</li>
+<li><b>History</b> (right-click an account, Ctrl+K, or Launch &gt; Server &gt; History): every session - which
+account played what, when and for how long - and the time played in the last 7 days per account and game.
+Kept on this PC only. Double-click a session to rejoin that server.</li>
+<li>Settings &gt; Security &gt; <b>Lock after</b> (with a password on your accounts file): after that long in the
+background Cellar hides your accounts until you type the password; your accounts keep running. Ctrl+L locks right
+away.</li>
 <li>Settings &gt; Desktop notifications &gt; <b>A friend comes online or starts a game</b>: a message with a
 <b>Join</b> button (friends of your main account).</li>
 <li>Right-click &gt; <b>Details</b> (or the Details button): Robux, Premium, account age and whether the login

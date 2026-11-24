@@ -230,8 +230,9 @@ class MySoberPage(QWidget):
         self.also_profiles = chk("Also in the accounts' own profiles (accounts that are not running)", False)
         f.addRow(self.also_profiles)
         f.addRow(row(btn("Reset Sober's settings...", self.reset_settings),
-                     btn("Open Sober's logs", lambda: sober.open_folder(sober.main_app() / "data" / "sober" /
-                                                                        "sober_logs"), icon="folder-open")))
+                     btn("Roblox logs...", self.open_logs,
+                         tip="What happened in your last sessions: joins, disconnects and errors (copy for a bug "
+                             "report, cookies removed)")))
         v.addWidget(g)
         v.addStretch(1)
         lay = QVBoxLayout(self)
@@ -338,6 +339,10 @@ class MySoberPage(QWidget):
                         + (f" in {len(apps)} Sober folders." if len(apps) > 1 else "."))
             self._sizes()
         bg(lambda: sum(sober.clean(a, key) for a in apps), done=done, err=lambda ex: b.setEnabled(True))
+
+    def open_logs(self):
+        from .log_viewer import RobloxLogDialog
+        RobloxLogDialog(self.mw).exec()
 
     def reset_settings(self):
         if sober.main_sober_running():

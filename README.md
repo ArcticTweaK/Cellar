@@ -40,25 +40,30 @@ extensions keep working there), press **Play**, and Cellar asks which of your ac
   in the server.
 - **Screen wall.** Live pictures of every background account in one window; click one to take over.
 - **Kicks noticed in seconds.** Cellar reads each account's Roblox log: a kick or lost connection shows a desktop
-  notification and can rejoin right away (the same server after a lost connection).
+  notification and can rejoin right away (the same server after a lost connection). Discord alerts of background
+  accounts include a picture of their screen with Roblox's message.
 - **Joining together.** Right-click an account > **Bring accounts to its server** sends your alts into the exact
   server it is in. Cellar can tell you when a friend starts playing, with a Join button.
 - **The website's Play button.** Turn it on in Settings and pressing Play on roblox.com asks which of your
   accounts should join that game, server or private server - or sends it on to your normal Sober.
 - **My Sober.** For your normal Sober too, even with one account: its settings in plain language, FPS cap,
-  a Fast Flags editor that shows which flags Roblox really uses, and cleanup of caches and crash dumps.
+  a Fast Flags editor that shows which flags Roblox really uses, cleanup of caches and crash dumps, and a
+  **Roblox logs** window that shows what happened in a session (joined, disconnected and why, real errors - not
+  the thousands of game-script lines) with a "copy for a bug report" that removes cookies.
 - **Account switcher.** Right-click an account > **Use in my normal Sober** logs your normal Sober into it.
   The account it had is saved first, so you can always switch back.
 - **Themes.** Blossom (pink), Midnight, Mint, Ember, Graphite, Daylight, or your desktop's own look
   (Settings > Appearance). It switches right away.
-- **Moving PCs.** Export your accounts to a password-protected file and import them on the new PC. Every server
-  your accounts joined is kept in a history you can rejoin from.
+- **History.** Which account played what and for how long, and the time played in the last 7 days per account
+  and game (kept on your PC only); rejoin any server from it.
+- **Moving PCs.** Export your accounts to a password-protected file and import them on the new PC.
 - **Runs itself.** A launch shows ✓ / ✗ per account with the reason and Retry failed; presets can start and stop
   on a schedule (18:00 to 02:00); alts can be muted (or each account given its own volume).
 - **Easy start.** A short setup on first start checks your system and shows the exact install command for
   anything missing. Cellar tells you when a new version is out (once a day from GitHub; can be turned off).
-- **The rest:** window layouts (KDE Plasma, Hyprland, Sway), anti-AFK, presets, per-account FPS/graphics, a RAM limit per alt,
-  colour tags and groups to tell accounts apart (right-click > **Colour tag**, filter the list by tag), drag accounts
+- **The rest:** window layouts (KDE Plasma, Hyprland, Sway; saved layouts, or spread over all your monitors), anti-AFK, presets, per-account FPS/graphics, a RAM limit per alt,
+  a lock that hides your accounts after a while in the background (password mode), colour tags and groups to tell
+  accounts apart (right-click > **Colour tag**, filter the list by tag), drag accounts
   to rearrange them, auto-relaunch when a window crashes or leaves the game, Discord webhooks, and encrypted accounts (your
   keyring or a password). If something goes wrong, Settings > System check > **Copy report** gives you a
   bug report with your cookies removed.
@@ -123,7 +128,8 @@ Linux desktops (Wayland) never let one program type into another program's windo
 only gets input while you have it focused. **Run in the background** (Edit account) gives the account its own
 invisible 1280×720 screen instead: a headless `sway` that only its Sober draws on, shared over a private
 `wayvnc` socket. Right-click the account > **View screen** to watch it, control it, or **record a macro**.
-The mouse position you see there is what `move` / `click` use.
+The mouse position you see there is what `move` / `click` use. **Step by step** (Macros tab) runs a macro one
+line at a time with the line highlighted, to see exactly where it goes wrong.
 
 Macros (Macros tab) are one step per line:
 

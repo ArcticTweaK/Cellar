@@ -75,13 +75,16 @@ cellar/
   audio.py        per-account sound: pw-dump streams -> pid (pipewire.sec.pid) -> cgroup = the instance; wpctl
                   set-mute / set-volume. LiveMixin.audio_tick every 5 s; Account.volume (-1 = Mute alts decides)
   schedule.py     scheduled presets: due() fires starts / stops once a day within a 15 min grace (overnight stops)
+  sessions.py     session history on settings.history (JoinRecord ts..end): start / end / close_missing / totals;
+                  times come from the Roblox log lines (robloxlog Event.ts) so re-read logs add nothing
   games.py        "Your games" data: recent places -> games (from_places, one per universe), the main account's
                   favourites, details (fill), place->universe (disk cache), game icons in ~/.cache/cellar (blocking)
   playlink.py     roblox-player: / roblox: links from the website -> LaunchSpec; xdg-mime handler on/off; forward to Sober
   cli.py          `cellar list|launch|preset|stop|show` -> "cmd <json>" over the single-instance socket (plain AF_UNIX
                   client, path <tempdir>/cellar-<uid>); MainWindow.run_command answers (reply ends with \0);
                   add_shortcut() writes app-menu .desktop entries
-  robloxlog.py    tails each client's Roblox log (appData/logs): joined / teleport / left / disconnected (+ reason)
+  robloxlog.py    tails each client's Roblox log (appData/logs): joined / teleport / left / disconnected (+ reason);
+                  parse_line / read_log / log_files for the Roblox logs window (ui/log_viewer.py; NOISE channels)
   theme.py        colour themes: Theme tokens -> QPalette (Fusion) + one app style sheet; apply(key) at any time;
                   c()/qc()/span() give the active theme's colours; mono_font(); 'system' = desktop's own style;
                   TAGS / tag_qc() / tag_icon() = account colour tags (Account.color), dark + light shade each

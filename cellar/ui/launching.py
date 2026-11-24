@@ -7,8 +7,8 @@ import time
 from typing import List, Optional
 
 
-from .. import api, playlink, sober, specs, store, usage, util, webhook
-from ..models import Account, GameEntry, Instance, JoinRecord, LaunchSpec
+from .. import api, playlink, sessions, sober, specs, store, usage, util, webhook
+from ..models import Account, GameEntry, Instance, LaunchSpec
 from .common import ask, bg, ui, warn
 from .dialogs import PlayLinkDialog
 from .widgets import _size
@@ -68,14 +68,18 @@ class LaunchMixin:
             return f"Launching {len(accs)} account(s)."
         return "ERR unknown command - try: cellar help"
 
-    def joined(self, inst: Instance, place_id: int, job_id: str):
-        """An account entered a server (its Roblox log said so): Continue playing + join history."""
+    def joined(self, inst: Instance, place_id: int, job_id: str, ts: float = 0.0):
+        """An account entered a server (its Roblox log said so, at `ts`): recent games + a new session."""
         s = store.settings
         if not s.recent or s.recent[0].place_id != place_id:
             self.add_recent(place_id)
-        s.history.insert(0, JoinRecord(time.time(), inst.account.id, inst.account.name, place_id, job_id))
-        del s.history[300:]
-        store.save_settings()
+        if sessions.start(s.history, inst.account.id, inst.account.name, place_id, job_id, now=ts or None):
+            store.save_settings()
+
+    def session_ended(self, inst: Instance, ts: float = 0.0):
+        """It left its server or was disconnected: its session ends (a rejoin starts a new one)."""
+        if sessions.end(store.settings.history, inst.account.id, now=ts or None):
+            store.save_settings()
 
     def open_servers(self, place_id: int):
         """A game's servers: the Launch tab's server picker for it (Server)."""

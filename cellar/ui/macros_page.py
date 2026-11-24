@@ -4,14 +4,15 @@ import re
 from pathlib import Path
 
 from PySide6.QtCore import QTimer
-from PySide6.QtGui import QFont, QSyntaxHighlighter, QTextCharFormat
+from PySide6.QtGui import (QColor, QFont, QKeySequence, QShortcut, QSyntaxHighlighter, QTextCharFormat, QTextCursor,
+                           QTextFormat)
 
 from PySide6.QtWidgets import (QCheckBox, QFileDialog, QHBoxLayout, QLabel, QLineEdit, QListWidget, QPlainTextEdit,
-                               QPushButton, QSplitter, QVBoxLayout, QWidget)
+                               QPushButton, QSplitter, QTextEdit, QVBoxLayout, QWidget)
 
 from .. import macros, store, theme
 from ..models import Macro
-from .common import hint
+from .common import btn, hint, ui
 
 
 _OPS = {"tap", "down", "up", "key", "type", "click", "rclick", "move", "scroll", "wait", "repeat", "random", "stop"}
@@ -113,12 +114,33 @@ class MacrosPage(QWidget):
         self.result.setWordWrap(True)
         rv.addWidget(self.result)
         row = QHBoxLayout()
-        for text, fn in (("Save", self._save), ("Run on selected accounts", self._run),
-                         ("Run once (test)", self._run_once), ("Stop on selected accounts", self._stop)):
+        self.run_buttons = []
+        for text, fn, tip in (("Save", self._save, ""), ("Run on selected accounts", self._run, ""),
+                              ("Run once (test)", self._run_once, "Runs the text as it is now, once, saved or not"),
+                              ("Step by step", self._step, "Runs it one step at a time on the selected account: the "
+                               "line it is on is highlighted, Next step (F10) does it. Waits are skipped."),
+                              ("Stop on selected accounts", self._stop, "")):
             b = QPushButton(text)
             b.clicked.connect(fn)
+            b.setToolTip(tip)
             row.addWidget(b)
+            self.run_buttons.append(b)
         rv.addLayout(row)
+        # step by step: what comes next, Next step / Stop (shown while stepping)
+        self.step_bar = QWidget()
+        sb = QHBoxLayout(self.step_bar)
+        sb.setContentsMargins(0, 0, 0, 0)
+        self.step_label = QLabel("")
+        sb.addWidget(self.step_label, 1)
+        self.b_next = btn("Next step  (F10)", self._next, primary=True)
+        sb.addWidget(self.b_next)
+        sb.addWidget(btn("Stop stepping", self._end_step))
+        self.step_bar.setVisible(False)
+        rv.addWidget(self.step_bar)
+        self._stepping = None           # the Instance being stepped through
+        self._step_n = 0
+        self._step_poll = QTimer(self, interval=300, timeout=self._step_alive)
+        QShortcut(QKeySequence("F10"), self, self._next)
         help_ = QLabel("<pre>" + macros.HELP.replace("&", "&amp;").replace("<", "&lt;") + "</pre>")
         help_.setTextInteractionFlags(help_.textInteractionFlags())
         rv.addWidget(help_)
@@ -296,7 +318,74 @@ class MacrosPage(QWidget):
         for i in insts:
             self.mw.launcher.start_macro_text(i, name, self.text.toPlainText(), False, self.mw.log)
 
+    # ---- step by step
+    def _step(self):
+        if self._stepping is not None or not self._check():
+            return
+        insts = self._targets()
+        if not insts:
+            self.mw.log("Select a running background account first (Edit account > Run in the background, then launch).")
+            return
+        inst = insts[0]
+        name = (self.name.text().strip() or "macro") + " (step by step)"
+        on_step = lambda line, what: ui(lambda: self._show_step(line, what))      # noqa: E731 - worker thread
+        if not self.mw.launcher.start_macro_text(inst, name, self.text.toPlainText(), False, self.mw.log, on_step):
+            return
+        self._stepping, self._step_n = inst, 0
+        self.text.setReadOnly(True)             # the highlighted line must stay the line that runs
+        for b in self.run_buttons:
+            b.setEnabled(False)
+        self.step_bar.setVisible(True)
+        self.step_label.setText(f"Stepping through on <b>{inst.account.name}</b>" + (
+            f" (only this one of the {len(insts)} selected)" if len(insts) > 1 else "") + "...")
+        self._step_poll.start()
+
+    def _show_step(self, line: int, what: str):
+        if self._stepping is None:
+            return
+        self._step_n += 1
+        block = self.text.document().findBlockByNumber(max(0, line - 1))
+        what = block.text().strip() or what            # the line as you wrote it ("tap e", not the key code)
+        self.step_label.setText(f"<b>{self._stepping.account.name}</b> · step {self._step_n} · line {line}: "
+                                f"<tt>{what.replace('&', '&amp;').replace('<', '&lt;')}</tt>  - press Next step to do it")
+        sel = QTextEdit.ExtraSelection()
+        bg_ = QColor(theme.c("accent"))
+        bg_.setAlphaF(0.22)
+        sel.format.setBackground(bg_)
+        sel.format.setProperty(QTextFormat.FullWidthSelection, True)
+        sel.cursor = QTextCursor(block)
+        self.text.setExtraSelections([sel])
+        self.text.setTextCursor(QTextCursor(block))
+        self.text.ensureCursorVisible()
+
+    def _next(self):
+        r = self._stepping.macro if self._stepping is not None else None
+        if r is not None:
+            r.next_step()
+
+    def _step_alive(self):
+        r = self._stepping.macro if self._stepping is not None else None
+        if r is None or not r.running:
+            self._end_step(finished=True)
+
+    def _end_step(self, finished: bool = False):
+        inst, self._stepping = self._stepping, None
+        self._step_poll.stop()
+        if inst is not None and not finished:
+            self.mw.launcher.stop_macro(inst)
+        self.text.setExtraSelections([])
+        self.text.setReadOnly(False)
+        for b in self.run_buttons:
+            b.setEnabled(True)
+        self.step_bar.setVisible(False)
+        if inst is not None:
+            self.result.setText(theme.span("good" if finished else "muted",
+                                           f"Step by step on {inst.account.name}: " +
+                                           (f"finished after {self._step_n} steps." if finished else "stopped.")))
+
     def _stop(self):
+        if self._stepping is not None:
+            self._end_step()
         n = sum(1 for i in self._targets() if self.mw.launcher.stop_macro(i))
         self.mw.log(f"Stopped {n} macro(s)." if n else "No macros were running on the selected accounts.")
 
