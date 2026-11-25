@@ -21,7 +21,7 @@ import threading
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Callable, List, Optional, Tuple
+from typing import Callable, Dict, List, Optional, Tuple
 
 from . import log
 from .sober import which
@@ -76,6 +76,9 @@ def start(rt: Path, logf: Callable[[str], None] = lambda m: None) -> Screen:
         raise RuntimeError(why + " (install the 'sway' and 'wayvnc' packages)")
     d = rt / "screen"
     d.mkdir(mode=0o700, parents=True, exist_ok=True)
+    old = _screen_units(rt)
+    if old:     # its client died while Cellar was closed: that screen (~190 MB) would otherwise run on forever
+        stop(Screen(d, d / "vnc.sock", old))
     for p in d.iterdir():                       # leftovers of an earlier screen
         if p.name.startswith(("wayland-", "sway-ipc", "vnc.sock")):
             try:
@@ -123,22 +126,30 @@ def start(rt: Path, logf: Callable[[str], None] = lambda m: None) -> Screen:
     return Screen(d, vnc, [sway_unit, vnc_unit])
 
 
-def find_running(rt: Path) -> Optional[Screen]:
-    """The screen of a background client that was started before this app (re)started."""
-    d = rt / "screen"
-    if not _is_socket(d / "vnc.sock"):
-        return None
+def _screen_units(rt: Path) -> List[str]:
+    """The running sway / wayvnc units of this account's screen (any start time)."""
     try:
         out = subprocess.run([which("systemctl") or "systemctl", "--user", "list-units", "--plain", "--no-legend",
                               f"{rt.name}-*"], capture_output=True, text=True, timeout=10).stdout
     except Exception:
         out = ""
-    units = [l.split()[0] for l in out.splitlines() if "-screen-" in l or "-vnc-" in l]
+    return [l.split()[0] for l in out.splitlines() if "-screen-" in l or "-vnc-" in l]
+
+
+def find_running(rt: Path) -> Optional[Screen]:
+    """The screen of a background client that was started before this app (re)started."""
+    d = rt / "screen"
+    if not _is_socket(d / "vnc.sock"):
+        return None
+    units = _screen_units(rt)
     return Screen(d, d / "vnc.sock", units) if units else None
 
 
 def stop(screen: Optional[Screen]) -> None:
-    if not screen or not screen.units:
+    if not screen:
+        return
+    close_input(screen)
+    if not screen.units:
         return
     try:
         subprocess.run([which("systemctl") or "systemctl", "--user", "stop", *screen.units],
@@ -181,17 +192,19 @@ def char_keysym(ch: str) -> int:
 class VNC:
     """Minimal RFB client for wayvnc's unix socket: no authentication, raw pixels (BGRX)."""
 
-    def __init__(self, path: Path, timeout: float = 5.0):
+    def __init__(self, path: Path, timeout: float = 5.0, frames: bool = True):
+        """frames=False: an input-only connection (no 3.7 MB frame buffer); see input_of()."""
         self.s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         self.s.settimeout(timeout)
         self._send_lock = threading.Lock()
+        self.broken = False
         try:
-            self._handshake(path)
+            self._handshake(path, frames)
         except BaseException:
             self.s.close()          # a failed connect left the socket open (every retry of a viewer / wall tile)
             raise
 
-    def _handshake(self, path: Path) -> None:
+    def _handshake(self, path: Path, frames: bool) -> None:
         self.s.connect(str(path))
         self._rx(12)
         self.s.sendall(b"RFB 003.008\n")
@@ -208,7 +221,7 @@ class VNC:
         # 32 bpp true colour, little endian: bytes B, G, R, X = QImage.Format_RGB32
         self._send(struct.pack(">BxxxBBBBHHHBBBxxx", 0, 32, 24, 0, 1, 255, 255, 255, 16, 8, 0))
         self._send(struct.pack(">BxHi", 2, 1, 0))                    # encodings: raw only
-        self.fb = bytearray(self.width * self.height * 4)
+        self.fb = bytearray(self.width * self.height * 4 if frames else 0)
         self.buttons = 0
         self.x = self.y = 0
 
@@ -223,13 +236,31 @@ class VNC:
 
     def _send(self, data: bytes) -> None:
         with self._send_lock:
-            self.s.sendall(data)
+            try:
+                self.s.sendall(data)
+            except OSError:
+                self.broken = True
+                raise
 
     def close(self) -> None:
+        self.broken = True
         try:
             self.s.close()
         except OSError:
             pass
+
+    def drain(self) -> None:
+        """Input-only connection (own thread): drop what the server sends (clipboard, bell) so nothing piles up,
+        and notice when the screen goes away."""
+        while not self.broken:
+            try:
+                if not self.s.recv(4096):
+                    break
+            except socket.timeout:
+                continue
+            except OSError:
+                break
+        self.broken = True
 
     # input
     def pointer(self, x: int, y: int, buttons: Optional[int] = None) -> None:
@@ -303,24 +334,70 @@ class VNC:
         return False
 
 
+# ------------------------------------------------------------------ one input connection per screen
+# wayvnc gives every VNC connection its own virtual keyboard, and whenever keys start coming from a different one,
+# sway sends the game a new keymap (measured with wev, sway 1.12 + wayvnc: viewer types, a macro types, the viewer
+# types again = two new keymaps). Sober then still walked with WASD but no longer typed in the chat (reported
+# 2026-11-24) - and every anti-AFK poke and every macro start used to be a new connection. So everything that sends
+# input (viewer, macros, anti-AFK) shares this one connection; picture-only connections never send keys.
+_inputs: Dict[str, VNC] = {}
+_inputs_lock = threading.Lock()
+
+
+def input_of(screen: Screen) -> VNC:
+    """The screen's shared input connection (connects, or reconnects if it broke). Raises if unreachable."""
+    key = str(screen.vnc)
+    with _inputs_lock:
+        v = _inputs.get(key)
+        if v is None or v.broken:
+            if v:
+                v.close()
+            v = _inputs[key] = VNC(screen.vnc, frames=False)
+            threading.Thread(target=v.drain, daemon=True, name="screen input").start()
+        return v
+
+
+def close_input(screen: Screen) -> None:
+    with _inputs_lock:
+        v = _inputs.pop(str(screen.vnc), None)
+    if v:
+        v.close()
+
+
+class Input:
+    """Sends input to a screen over its shared connection: Input(screen).tap(...), .key, .type_text, .click,
+    .pointer, .scroll. A connection that broke (the screen restarted) is replaced once and the call repeated."""
+
+    def __init__(self, screen: Screen):
+        self.screen = screen
+
+    def __getattr__(self, name: str):
+        if name.startswith("_") or not callable(getattr(VNC, name, None)):
+            raise AttributeError(name)
+
+        def call(*args, **kw):
+            try:
+                return getattr(input_of(self.screen), name)(*args, **kw)
+            except OSError:
+                return getattr(input_of(self.screen), name)(*args, **kw)
+        return call
+
+
 def poke(screen: Screen, action: str) -> bool:
     """Anti-AFK for a background client: no focus change, nothing on your desktop."""
     try:
-        v = VNC(screen.vnc)
-        try:
-            if action == "Space":
-                v.tap(0x20, 0.08)
-            elif action == "Nudge":
-                v.pointer(W // 2, H // 2)
-                time.sleep(0.05)
-                v.pointer(W // 2 + 6, H // 2 + 4)
-            else:                                                    # Zoom: I then O
-                v.tap(ord("i"), 0.15)
-                time.sleep(0.1)
-                v.tap(ord("o"), 0.15)
-            return True
-        finally:
-            v.close()
+        v = Input(screen)
+        if action == "Space":
+            v.tap(0x20, 0.08)
+        elif action == "Nudge":
+            v.pointer(W // 2, H // 2)
+            time.sleep(0.05)
+            v.pointer(W // 2 + 6, H // 2 + 4)
+        else:                                                    # Zoom: I then O
+            v.tap(ord("i"), 0.15)
+            time.sleep(0.1)
+            v.tap(ord("o"), 0.15)
+        return True
     except Exception as ex:
         log.write(f"background anti-AFK failed: {ex}")
         return False

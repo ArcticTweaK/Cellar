@@ -133,13 +133,20 @@ def sober_update_available() -> bool:
 
 
 def sober_version() -> str:
+    """Cached for 10 minutes: `flatpak info` takes 100 ms+, and the log window / System check ask on the UI
+    thread."""
+    hit = _cache.get("version")
+    if hit and time.time() - hit[1] < 600:
+        return hit[0]
     fp = which("flatpak")
     try:
         out = subprocess.run([fp, "info", SOBER_ID], capture_output=True, text=True, timeout=15).stdout
         m = re.search(r"Version:\s*(\S+)", out)
-        return m.group(1) if m else ""
+        v = m.group(1) if m else ""
     except Exception:
-        return ""
+        v = ""
+    _cache["version"] = (v, time.time())
+    return v
 
 
 def multi_instance_support() -> Tuple[bool, str]:
@@ -592,8 +599,16 @@ def build_command(uri: str, a: Account, isolated: bool,
     return argv, env, unit
 
 
+_OUTPUT_KEEP = 2 * 2**20       # sober-output.log grew by every launch's output forever (7 MB per account measured)
+
+
 def spawn(argv: List[str], env: Dict[str, str], log_file: Path) -> subprocess.Popen:
     log_file.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        if log_file.stat().st_size > _OUTPUT_KEEP:
+            log_file.replace(log_file.with_suffix(".old.log"))     # one older copy is kept for bug reports
+    except OSError:
+        pass
     out = open(log_file, "ab")
     try:
         out.write(f"\n===== {time.strftime('%Y-%m-%d %H:%M:%S')} launch =====\n".encode())

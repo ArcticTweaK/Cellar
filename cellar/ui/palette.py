@@ -11,7 +11,7 @@ from PySide6.QtWidgets import QLineEdit, QListWidget, QListWidgetItem, QStyledIt
 
 from .. import store, theme
 from ..models import LaunchSpec
-from .common import Dialog
+from .common import Dialog, bg
 
 Command = Tuple[str, str, Callable[[], None]]       # title, hint (right side), action
 
@@ -28,7 +28,8 @@ def commands(mw) -> List[Command]:
     for a in store.accounts:
         out.append((f"Launch {a.name}", "account", lambda a=a: mw.start_launch([a])))
         if mw.launcher.running(a):
-            out.append((f"Stop {a.name}", "account", lambda a=a: mw.launcher.stop_account(a, mw.log)))
+            out.append((f"Stop {a.name}", "account", lambda a=a: bg(mw.launcher.stop_account, a, mw.log,
+                                                                      done=lambda _: mw.update_running())))
     for g in sorted({a.group for a in store.accounts if a.group}):
         accs = [a for a in store.accounts if a.group == g]
         out.append((f"Launch group {g} ({len(accs)})", "group", lambda accs=accs: mw.start_launch(accs)))

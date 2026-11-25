@@ -17,7 +17,7 @@ The developer's machine: **NixOS, KDE Plasma 6, Wayland**.
 - **Look at UI changes** without disturbing the user's running Cellar: `nix develop -c python tools/screenshot.py
   OUT_DIR [themes] [tabs]` renders the main window off-screen with fake accounts and fake recent games, no network
   (tabs: 0 Launch, 1 Presets, 2 Macros, 3 Anti-AFK, 4 Windows, 5 My Sober, 6 Performance, 7 Settings, 8 Help;
-  EMPTY=1 = no accounts, TABLE=1 = table view), then Read the PNGs.
+  EMPTY=1 = no accounts, TABLE=1 = table view, SCROLL=1 = bottom of a long tab), then Read the PNGs.
 - README picture: `nix develop -c python tools/readme_screenshot.py` rewrites docs/screenshot.png (made-up account
   names: ArcticTweaK + altaccount1..5, real game icons from ~/.cache/cellar, names from Roblox's public API).
 - Run from source: `nix develop -c python -m cellar` (devShell has PySide6, requests, cryptography, secretstorage,
@@ -152,9 +152,15 @@ measured at the previous start). Cellar sits next to roblox.com + RoValra: no we
 - **Alts vs main**: global `fps_cap` + gfx preset are *alt* settings; `Account.full_quality` skips them.
 - **Background mode** (`Account.background`, needs multi-instance): sway+wayvnc units named
   `cellar-<id[:12]>-screen-<ts>.service` / `-vnc-`; Sober gets `WAYLAND_DISPLAY=wayland-cellar` (symlink in its
-  runtime dir). `Instance.screen` holds the `background.Screen`; macros and background anti-AFK talk VNC to `screen.vnc`.
+  runtime dir). `Instance.screen` holds the `background.Screen`. **All input** (viewer, macros, background
+  anti-AFK) goes through `background.Input(screen)` = one shared connection per screen: wayvnc makes a virtual
+  keyboard per connection and sway sends a new keymap whenever keys come from another one - Sober then stopped
+  typing in chat (WASD still worked). Picture-only connections (viewer frames, wall, Discord) never send keys.
 - **Restart survival**: `Launcher.adopt_running()` re-attaches running clients by tracker at startup;
-  `_running_screen()` finds their screens. Cellar can quit leaving clients running.
+  `_running_screen()` finds their screens. Cellar can quit leaving clients running. Each launch writes
+  `launch.json` (spec + isolated) into the account's runtime dir, so an adopted client that crashes or is kicked
+  goes back to the same game (`again_spec`). Screens whose client is gone are stopped at startup and before a
+  new screen starts in the same dir. Tests must patch `sober.runtime_dir_path` (never the real runtime dir).
 - **Watcher** (main_window timer → `Launcher.watcher_tick` on a worker): dead = not `user_closed` and not alive;
   relaunch with the old spec, crash breaker per account. `Launcher.log_tick` (every 4 s) reads the Roblox logs:
   sets `Instance.place_id/job_id`, and on a disconnect notifies + (setting `rejoin_on_kick`) rejoins.

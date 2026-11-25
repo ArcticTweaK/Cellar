@@ -188,7 +188,8 @@ class PerfPage(QWidget, _Bound):
         inner = QWidget()
         v = QVBoxLayout(inner)
         v.addWidget(hint("<b>How your alts run.</b> Accounts marked <i>Full quality - this is my main</i> (Edit "
-                         "account) skip the FPS cap and graphics. Written into each account's own Sober when it "
+                         "account) skip the FPS cap, graphics, CPU priority and RAM limit. Written into each "
+                         "account's own Sober when it "
                          "launches - running windows keep theirs until relaunched."))
         g, f = group("Last hour - everything Cellar runs for your accounts")
         from .widgets import UsageGraph
@@ -248,13 +249,16 @@ class PerfPage(QWidget, _Bound):
         v.addWidget(g)
 
         g, f = group("CPU and memory")
-        f.addRow("CPU priority", self.bind(combo([("Normal", "Normal"), ("BelowNormal", "Below normal"),
-                                                  ("Idle", "Idle (only spare CPU)")], S().priority), S, "priority"))
-        f.addRow("RAM limit per window", self.bind(spin(0, 65536, S().ram_cap_mb, suffix=" MB", special="off",
-                                                        tip="Soft memory limit (systemd MemoryHigh) of each Sober window. "
-                                                            "Above it the kernel reclaims that window's memory first."),
-                                                   S, "ram_cap_mb"))
-        f.addRow(row(btn("Apply priority and limit to running windows",
+        f.addRow("CPU priority of alts", self.bind(combo([("Normal", "Normal"), ("BelowNormal", "Below normal"),
+                                                          ("Idle", "Idle (only spare CPU)")], S().priority,
+                                                         tip="Accounts marked Full quality (your main) always run "
+                                                             "at normal priority."), S, "priority"))
+        f.addRow("RAM limit per alt", self.bind(spin(0, 65536, S().ram_cap_mb, suffix=" MB", special="off",
+                                                     tip="Soft memory limit (systemd MemoryHigh) of each alt's Sober "
+                                                         "window. Above it the kernel reclaims that window's memory "
+                                                         "first. Accounts marked Full quality (your main) have none."),
+                                                S, "ram_cap_mb"))
+        f.addRow(row(btn("Apply to running alts",
                          lambda: bg(self.mw.launcher.apply_limits_all, self.mw.log))))
         f.addRow("Before each launch, wait until", self.bind(spin(0, 65536, S().min_free_ram_mb, suffix=" MB free",
                                                          special="off", tip="Before each account starts, wait (up to 3 "
@@ -772,7 +776,8 @@ more than one screen, <b>All monitors</b> shares the windows out by screen size,
 <h3>Alts and performance</h3>
 <p>The <b>Performance</b> tab: FPS cap, graphics Fast Flags and Sober options are written into each
 account's profile before it launches. CPU priority and the RAM limit use the systemd scope every Sober window runs
-in. The page also
+in; like the FPS cap they are for alts only, so an account marked Full quality (your main) keeps normal priority and
+no RAM limit. The page also
 estimates how many more alts fit in your free memory, can wait before each launch until enough memory is free,
 and can close the newest alt when memory runs low (never one marked Full quality). <b>Last hour</b> graphs the CPU
 and memory of everything Cellar runs (hover for exact values). Edit account &gt; <b>Graphics</b> gives one account

@@ -243,10 +243,9 @@ class Runner:
         return True
 
     def _run(self) -> None:
-        v: Optional[background.VNC] = None
         held: set = set()
+        v = background.Input(self.screen)       # the screen's shared input connection - see background.input_of
         try:
-            v = background.VNC(self.screen.vnc)
             while not self._stop.is_set():
                 if not self._exec(v, self.steps, held):
                     break
@@ -259,13 +258,11 @@ class Runner:
             log.error("macro", ex)
             self.logf(f"[{self.who}] macro '{self.name}' stopped: {ex}")
         finally:
-            if v:
-                for k in held:                  # never leave a key held down
-                    try:
-                        v.key(k, False)
-                    except Exception:
-                        pass
-                v.close()
+            for k in held:                      # never leave a key held down
+                try:
+                    v.key(k, False)
+                except Exception:
+                    pass
 
 
 def from_recording(events: List[tuple]) -> str:

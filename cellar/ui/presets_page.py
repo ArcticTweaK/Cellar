@@ -289,6 +289,8 @@ class PresetsPage(QWidget):
                 if cancel.is_set():
                     break
                 a = store.find_by_id(e.account_id)
+                if a is None:                   # removed while the preset was running
+                    continue
                 if mw.launcher.running(a):
                     mw.log(f"[{a.name}] is already running - only its window is placed.")
                     continue
@@ -326,9 +328,11 @@ class PresetsPage(QWidget):
             return
         wins = {sober.tracker_of_pid(w.pid): w for w in mw.kwin.windows()}
         want = []           # (entry, account, window or None); looked up every round: accounts can be removed
+        bg_mode = store.settings.multi_instance
         for e in p.entries:
             a = store.find_by_id(e.account_id)
-            if a and a.tracker_id:
+            # a background account has no window on your desktop: waiting for one held the others for a minute
+            if a and a.tracker_id and not (a.background and bg_mode):
                 want.append((e, a, wins.get(a.tracker_id)))
         if any(w is None for _, _, w in want) and time.time() < deadline:
             QTimer.singleShot(2000, lambda: self._place_when_ready(p, deadline))

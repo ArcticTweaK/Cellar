@@ -481,7 +481,12 @@ class WindowsPage(QWidget):
         L = store.settings.layout
         if not L.auto_capture or self.mw.kwin is None:
             return
-        ours = {i.tracker for i in self.mw.launcher.snapshot()}
+        # only clients with a window on your desktop (background ones have none): asking KWin loads a script each
+        # time, on the UI thread - not worth doing every 2 s while nothing could have opened a window
+        ours = {i.tracker for i in self.mw.launcher.snapshot() if not i.screen}
+        if not ours:
+            self.seen = set()
+            return
         wins = self.mw.kwin.windows()
         new = [w for w in wins if w.id not in self.seen and sober.tracker_of_pid(w.pid) in ours]
         self.seen = {w.id for w in wins}

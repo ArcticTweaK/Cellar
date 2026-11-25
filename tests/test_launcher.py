@@ -1,7 +1,9 @@
 """Launcher bookkeeping: one record per account (the "8 / 6 running" bug)."""
 
+import tempfile
 import types
 import unittest
+from pathlib import Path
 from unittest import mock
 
 from cellar import launcher, store
@@ -49,6 +51,10 @@ class OneRecordPerAccount(unittest.TestCase):
             mock.patch.object(launcher.gfx, "final", lambda *a: ({}, [])),
             mock.patch.object(launcher.time, "sleep", lambda s: None),
         ]
+        rt = tempfile.TemporaryDirectory()                # launch.json: never the real runtime dir
+        self.addCleanup(rt.cleanup)
+        self.rt = Path(rt.name)
+        patches.append(mock.patch.object(launcher.sober, "runtime_dir_path", lambda a, prefix="": self.rt / a.id[:12]))
         for p in patches:
             p.start()
             self.addCleanup(p.stop)
@@ -77,6 +83,68 @@ class OneRecordPerAccount(unittest.TestCase):
                 mock.patch.object(self.L, "launch") as relaunch:
             self.L.watcher_tick(log.append, lambda: None)
         self.assertEqual(relaunch.call_count, 1)         # the stale record made it 2 before
+
+    def test_after_a_cellar_restart_a_crash_goes_back_to_the_same_game(self):
+        spec = LaunchSpec(kind="Private", place_id=42, link_code="abc")
+        self.L.launch(self.a, spec, lambda m: None)
+        restarted = launcher.Launcher()                  # Cellar restarted; the client kept running
+        with mock.patch.object(launcher.sober, "all_sober_trackers",
+                               lambda *a: {self.a.tracker_id: self.world.clients[self.a.tracker_id]}), \
+                mock.patch.object(launcher.store, "find_by_tracker", lambda t: self.a), \
+                mock.patch.object(launcher, "_running_screen", lambda a: None):
+            restarted.adopt_running()
+        inst = restarted.instances_of(self.a)[0]
+        self.assertEqual((inst.spec.kind, inst.spec.place_id, inst.spec.link_code), ("Private", 42, "abc"))
+        self.assertEqual(launcher.again_spec(inst).link_code, "abc")
+
+    def test_stop_while_starting_is_not_reported_as_a_crash(self):
+        log = []
+        self.world.spawn = lambda *a: types.SimpleNamespace(pid=1, poll=lambda: None, wait=lambda *x, **k: 0)
+        with mock.patch.object(launcher.sober, "spawn", self.world.spawn):
+            def stop_soon(_s, L=self.L):
+                for i in L.snapshot():
+                    i.user_closed = True
+            with mock.patch.object(launcher.time, "sleep", stop_soon):
+                self.assertFalse(self.L.launch(self.a, LaunchSpec(), log.append))
+        self.assertFalse(any("exited right away" in m or "did not show up" in m for m in log))
+        self.assertTrue(any("stopped while it was starting" in m for m in log))
+
+
+class LimitsAreForAlts(unittest.TestCase):
+    """CPU priority / RAM limit: alts only; a Full quality window (your main) is set back to normal."""
+
+    def test_apply_to_running_skips_the_main(self):
+        main = Account(username="main", full_quality=True)
+        alt = Account(username="alt")
+        L = launcher.Launcher()
+        running = [launcher.Instance(account=main, pid=101), launcher.Instance(account=alt, pid=202)]
+        calls = []
+        with mock.patch.object(launcher.sober, "apply_limits", lambda pid, *a: calls.append((pid, *a)) or ""), \
+                mock.patch.object(L, "alive_instances", lambda: running), \
+                mock.patch.object(store.settings, "priority", "Idle"), \
+                mock.patch.object(store.settings, "ram_cap_mb", 900):
+            n = L.apply_limits_all(lambda m: None)
+        self.assertEqual(n, 1)
+        self.assertIn((202, "Idle", 900), calls)
+        self.assertIn((101, "Normal", 0), calls)
+
+
+class AgainSpec(unittest.TestCase):
+    def inst(self, spec, place=0):
+        from cellar.models import Instance
+        return Instance(account=Account(username="x"), spec=spec, place_id=place)
+
+    def test_kicked_from_one_server_goes_to_the_game_not_that_server(self):
+        sp = launcher.again_spec(self.inst(LaunchSpec(kind="Job", place_id=7, job_id="j")), kicked=True)
+        self.assertEqual((sp.kind, sp.place_id, sp.job_id), ("Game", 7, ""))
+
+    def test_a_crash_goes_back_to_the_same_server(self):
+        sp = launcher.again_spec(self.inst(LaunchSpec(kind="Job", place_id=7, job_id="j")))
+        self.assertEqual((sp.kind, sp.job_id), ("Job", "j"))
+
+    def test_nothing_known_uses_the_place_from_its_log(self):
+        sp = launcher.again_spec(self.inst(LaunchSpec(), place=99))
+        self.assertEqual((sp.kind, sp.place_id), ("Game", 99))
 
 if __name__ == "__main__":
     unittest.main()

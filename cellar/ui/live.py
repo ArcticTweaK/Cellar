@@ -263,13 +263,19 @@ class LiveMixin:
                 self.presets_page.run(p)
             else:
                 ids = {e.account_id for e in p.entries}
-                n = 0
-                for a in [a for a in store.accounts if a.id in ids]:
-                    if self.launcher.running(a):
+                accs = [a for a in store.accounts if a.id in ids]
+
+                def stop(accs=accs):            # on a worker: closing waits up to 3 s per client
+                    run = [a for a in accs if self.launcher.running(a)]
+                    for a in run:
                         self.launcher.stop_account(a, self.log)
-                        n += 1
-                self.log(f"Schedule: stopped preset '{p.name}' ({sc.stop}) - {n} account(s) closed.")
-                self.desktop_notify("done", f"Schedule: stopped '{p.name}' ({n} account(s)).")
+                    return len(run)
+
+                def done(n, p=p, sc=sc):
+                    self.log(f"Schedule: stopped preset '{p.name}' ({sc.stop}) - {n} account(s) closed.")
+                    self.desktop_notify("done", f"Schedule: stopped '{p.name}' ({n} account(s)).")
+                    self.update_running()
+                bg(stop, done=done)
         store.save_settings()
 
     def toast(self, text: str, kind: str = "info", action=None):

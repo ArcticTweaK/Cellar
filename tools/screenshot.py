@@ -25,7 +25,7 @@ os.environ["QT_QPA_PLATFORM"] = "offscreen"
 sys.path.insert(0, ROOT)
 
 from PySide6.QtCore import QCoreApplication, Qt  # noqa: E402
-from PySide6.QtWidgets import QApplication  # noqa: E402
+from PySide6.QtWidgets import QApplication, QScrollArea  # noqa: E402
 
 QCoreApplication.setAttribute(Qt.AA_ShareOpenGLContexts)
 app = QApplication([])
@@ -87,6 +87,14 @@ def main() -> int:
             w.tabs.setCurrentIndex(int(tab))
             for _ in range(5):
                 app.processEvents()
+            if os.environ.get("SCROLL"):            # SCROLL=1: the bottom of a long tab (e.g. Performance)
+                page = w.tabs.currentWidget()
+                for sa in [page, *page.findChildren(QScrollArea)]:
+                    if isinstance(sa, QScrollArea):
+                        sb = sa.verticalScrollBar()
+                        sb.setValue(sb.maximum())
+                for _ in range(3):
+                    app.processEvents()
             w.grab().save(os.path.join(out, f"{th}_{tab}.png"))
     print("saved to", out)
     return 0

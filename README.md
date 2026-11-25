@@ -38,7 +38,7 @@ can check exactly what it does.
 - **Background mode** - an account runs on its own invisible screen with its own mouse and keyboard. Nothing
   shows on your desktop, nothing steals your focus. *View screen* to watch it or take over.
 - **Cheap alts** - 30 FPS and the lowest graphics by default: about **0.17 CPU cores and 1 GB RAM** per alt.
-  Your main keeps full quality. **Freeze** pauses an alt at 0% CPU while it stays in the server.
+  Your main keeps full quality (no FPS cap, CPU priority or RAM limit). **Freeze** pauses an alt at 0% CPU while it stays in the server.
 - **Screen wall** - live pictures of every background account in one window.
 
 ### 🎮 Launch in two clicks

@@ -121,7 +121,9 @@ class ScreenViewer(Dialog):
         self.inst, self.logf, self.macros_changed = inst, logf, macros_changed
         self.setWindowTitle(f"{inst.account.name} - background screen")
         self.resize(1000, 640)
-        self.vnc: Optional[background.VNC] = None
+        self.vnc: Optional[background.VNC] = None       # the picture only; input goes through self.inp
+        self.inp = background.Input(inst.screen)         # shared with macros + anti-AFK (background.input_of)
+        self.xy = (0, 0)
         self._stop = threading.Event()
         self.recording: Optional[List[tuple]] = None
         self.buttons = 0
@@ -214,16 +216,18 @@ class ScreenViewer(Dialog):
             self.rec.setChecked(False)
 
     def _input(self, kind: str, data):
-        v = self.vnc
-        if not v or not self.control.isChecked():
+        v = self.inp
+        if not self.vnc or not self.control.isChecked():
             return
         self.used_input = True
         t = time.time()
         try:
             if kind == "move":
+                self.xy = data
                 v.pointer(*data)
             elif kind in ("press", "release"):
                 (x, y), b = data
+                self.xy = (x, y)
                 mask = {1: 1, 2: 2, 3: 4}[b]
                 self.buttons = self.buttons | mask if kind == "press" else self.buttons & ~mask
                 v.pointer(x, y, self.buttons)
@@ -269,15 +273,15 @@ class ScreenViewer(Dialog):
 
     def done(self, r):
         self._stop.set()
+        if self.used_input:                             # only clean up input you actually sent
+            try:
+                for k in ("shift", "ctrl", "alt"):      # never leave a modifier held down
+                    self.inp.key(background.keysym(k), False)
+                if self.buttons:
+                    self.inp.pointer(*self.xy, 0)
+            except Exception:
+                pass
         if self.vnc:
-            if self.used_input:                         # only clean up input you actually sent
-                try:
-                    for k in ("shift", "ctrl", "alt"):  # never leave a modifier held down
-                        self.vnc.key(background.keysym(k), False)
-                    if self.buttons:
-                        self.vnc.pointer(self.vnc.x, self.vnc.y, 0)
-                except Exception:
-                    pass
             self.vnc.close()
         super().done(r)
         self.deleteLater()          # shown, not exec()'d: free it (its last frame alone is 3.7 MB)

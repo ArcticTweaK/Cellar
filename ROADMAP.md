@@ -65,6 +65,25 @@ the real running app was ~450 MB after hours.
       now (its scope is the client's cgroup); checked against six real clients
 - [x] **S** "Last used" said "4 h ago" for accounts that were playing right then (it was the launch time): running
       accounts say Now, and the time is set when a client stops (or when Cellar quits leaving it running)
+- [x] **S** Background alts stopped typing in the Roblox chat (WASD still worked) after a macro was stopped and
+      started again or anti-AFK had run: every VNC connection is its own virtual keyboard, and each switch made sway
+      send the game a new keymap (measured with wev). Viewer, macros and anti-AFK now share one connection per screen
+- [x] **S** Bug hunt 2026-11-25:
+  - after a Cellar restart, a crashed or kicked alt was relaunched into nothing (the Sober home screen) - the launch
+    target is kept in the account's runtime dir now; kicked out of one server it goes to the game, not that server
+  - a background screen (~190 MB) of a client that closed while Cellar was not running stayed up for good; a new
+    screen also started in the folder of a still-running old one. Leftovers are closed at startup / before a launch
+  - "did not show up within 90 s" left that Sober running, untracked, on a screen that had just been stopped
+  - Stop while an account was starting was logged as "Sober exited right away (code ...)"
+  - sober-output.log grew by every launch forever (7 MB per account measured): rotated at 2 MB now
+  - scheduled stops, Ctrl+K "Stop <account>" and `cellar stop` closed clients on the UI thread (up to 3 s each)
+  - a preset with background accounts waited a full minute for desktop windows they never get, asking KWin every 2 s
+  - a preset crashed if one of its accounts was removed while it ran; auto-arrange asked KWin every 2 s with no
+    client running; `flatpak info` (Sober version) ran on the UI thread for the log window / System check
+  - checked and fine: join / leave detection against real Roblox logs (a normal leave, reason 285, is not taken
+    for a kick), no cookies or login tickets in any log, API calls batched to Roblox's limits
+- [x] **S** CPU priority and the RAM limit (Performance) hit every window, your main too: alts only now, like the FPS
+      cap; "Apply to running alts" sets a Full quality window back to normal
 - [x] **S** Restart (Settings > Size) did not bring Cellar back: the new copy found the old one still quitting
       (background jobs finishing) and handed over to it. The socket now closes when quitting starts, and the
       restarter waits for the old process (max 15 s). Same fix for reopening Cellar right after quitting
@@ -211,6 +230,66 @@ the real running app was ~450 MB after hours.
 - [x] **M** Split `main_window.py` (1627 -> 529 lines): accounts.py, launching.py, live.py, widgets.py mixins
 - [x] **S** "Save debug bundle": log + system check + versions, with cookies scrubbed
 - [x] **S** Crash handler: uncaught exceptions → log + friendly dialog instead of a silent failure
+
+## 12. Ideas (2026-11-25 brainstorm - not decided; honest notes on what each is worth)
+
+**Less CPU / RAM / GPU per alt**
+- [ ] **M** Smaller invisible screen per account: 960x540 or 640x360 instead of 1280x720. Fewer pixels to draw =
+      less GPU time and VRAM; CPU and RAM barely change (Roblox's game logic costs the same). Macros keep 1280x720
+      numbers and get scaled on the way out. Measure first: at quality level 1 the render is already cheap
+- [ ] **S** Alts on E-cores: start alts with `taskset -c 12-15` (read /sys/devices/cpu_atom/cpus) so the main keeps
+      the fast cores. Measured: cpuset is not delegated to user services here, so taskset, not AllowedCPUs.
+      Only for Intel 12th gen+ / hybrid CPUs; hidden elsewhere
+- [ ] **S** Own FPS cap for background accounts (e.g. 15): nobody watches them, half the frames of 30
+- [ ] **S** "Farm mode" one switch: Lowest graphics + background FPS cap + mute alts + freeze-keep-connected
+- [ ] **S** Write the quality slider too (SavedQualityLevel 1 in each alt's GlobalBasicSettings): the in-game menu
+      then shows the truth, and it is a backup if Roblox ever drops DFIntDebugFRMQualityLevelOverride
+- [ ] 🔬 **S** Measure sway with the software renderer (WLR_RENDERER=pixman): sway is ~150 MB per background
+      account, much of it GPU driver; pixman may save RAM but costs CPU copying frames. Only worth it if measured
+
+**Keeping alts in the game**
+- [ ] **M** Stuck-screen check for background accounts: the picture has not changed for N minutes (Roblox froze,
+      a dialog is up) -> relaunch. The process watcher can't see this
+- [ ] **S** "Not in a game" alert: an alt that has been "Sober running" (home screen) for 5+ min gets a toast /
+      rejoin - like arctic_hz in the 2026-11-24 screenshot
+- [ ] **S** Check logins every few hours (not only at start) and warn before a cookie runs out mid-farm
+- [ ] **S** "Launch the missing ones": start every account of a group / preset that is not running
+
+**Background mode and macros**
+- [ ] **M** Global "stop all macros" shortcut (KDE global shortcuts / XDG GlobalShortcuts portal)
+- [ ] **M** Send to all: type one chat message or press one key on every selected background account (screen wall).
+      ⚠ multi-boxing input, opt-in
+- [ ] **S** Macro schedules: run macro X on these accounts from 18:00 to 22:00 (schedules exist for presets)
+- [ ] **S** Screenshot every background screen at once (one folder, for checking a farm at a glance)
+- [ ] **S** Better recording: trim pauses, optional mouse paths, edit after recording
+- [ ] ⚠ **L** `ifcolor` / `waitcolor` pixel checks (already listed in 5.)
+
+**Accounts and Sober**
+- [ ] **S** Copy my Roblox settings to alts: keybinds, camera, sensitivity from your main's GlobalBasicSettings
+      (graphics / FPS stay Cellar's)
+- [ ] **S** Disk use per profile (and how much is shared by reflink) + clean every profile's old Sober logs
+      (sober_logs reached 5.8 MB in one profile)
+- [ ] **S** Repair: reinstall Roblox files (already in 9.)
+- [ ] **S** Time in game in the list: "Now · 2 h 10 min" from the session history
+
+**Notifications**
+- [ ] **M** Daily Discord summary: who played what, for how long, kicks / relaunches (the data exists)
+- [ ] **S** Group actions in the tray menu: launch / stop a group without opening the window
+
+**Project**
+- [ ] **S** TESTING.md: the "built with fakes, check on a real machine" list as a checklist with steps
+- [ ] **M** Publishing (already in 2.): AUR account, nixpkgs PR, .deb / .rpm via CI
+
+**Not worth it (yet)**
+- Translations now - every text change would need four languages while the UI still moves; after 1.2 settles
+- Alts friending each other - bulk friend requests + accepts between linked accounts is the pattern Roblox flags;
+  saves minutes once
+- Starting wayvnc only when needed - every new connection is a new virtual keyboard (the chat bug of 2026-11-24)
+
+**Known small things left as they are**
+- A Cellar restart opens a new input connection for running background alts = one keymap change for them
+- A schedule start within 15 min before midnight is missed if the PC only checks after midnight
+- Sober puts "FFlagExample" into every profile's config.json; harmless (not on Roblox's allowlist)
 
 ## Suggested order
 

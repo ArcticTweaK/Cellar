@@ -39,15 +39,16 @@ class LaunchMixin:
             self.presets_page.run(p)
             return f"Running preset '{p.name}'."
         if cmd == "stop":
+            # closing waits up to 3 s per client: on a worker, the window must not freeze meanwhile
             if rest == ["all"]:
-                return f"Closed {self.launcher.stop_all(self.log)} window(s)."
+                n = len(self.launcher.alive_instances())
+                bg(self.launcher.stop_all, self.log, done=lambda _: self.update_running())
+                return f"Closing {n} window(s)."
             accs, err = cli.pick_accounts(rest)
             if err:
                 return "ERR " + err
-            for a in accs:
-                self.launcher.stop_account(a, self.log)
-            self.update_running()
-            return f"Stopped {len(accs)} account(s)."
+            bg(lambda: [self.launcher.stop_account(a, self.log) for a in accs], done=lambda _: self.update_running())
+            return f"Stopping {len(accs)} account(s)."
         if cmd == "launch":
             names, spec, err = cli.parse_launch(rest)
             if err:

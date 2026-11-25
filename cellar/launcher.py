@@ -3,6 +3,7 @@
 All methods here block - call them from a worker thread, never from the UI thread.
 """
 
+import json
 import random
 import threading
 import time
@@ -10,7 +11,7 @@ from dataclasses import dataclass
 from typing import Callable, Dict, List, Optional
 
 from . import api, background, gfx, log, macros, paths, robloxlog, sober, store, util, webhook
-from .models import Account, Instance, LaunchSpec
+from .models import Account, Instance, LaunchSpec, from_dict, to_dict
 
 LogF = Callable[[str], None]
 
@@ -31,6 +32,39 @@ def _running_screen(a: Account):
         if s:
             return s
     return None
+
+
+_LAUNCH_FILE = "launch.json"
+
+
+def _save_launch(a: Account, spec: LaunchSpec, isolated: bool) -> None:
+    """Where this client was sent, in its runtime dir (gone after a reboot, like the client): after a Cellar restart
+    the watcher / rejoin needs it - an adopted client used to come back to the Sober home screen."""
+    try:
+        d = sober.runtime_dir_path(a)
+        d.mkdir(mode=0o700, parents=True, exist_ok=True)
+        (d / _LAUNCH_FILE).write_text(json.dumps({"spec": to_dict(spec), "isolated": isolated}))
+    except OSError:
+        pass
+
+
+def _load_launch(a: Account):
+    try:
+        d = json.loads((sober.runtime_dir_path(a) / _LAUNCH_FILE).read_text())
+        return from_dict(LaunchSpec, d.get("spec") or {}), bool(d.get("isolated", True))
+    except (OSError, ValueError, AttributeError):
+        return None, True
+
+
+def again_spec(i: Instance, kicked: bool = False) -> LaunchSpec:
+    """Where a client that closed or was kicked goes back to: what it was launched with, else (nothing known) the
+    place its Roblox log says it was in. Kicked out of one particular server: that game, not the same server."""
+    sp = i.spec if i.spec and (i.spec.place_id or i.spec.follow_user_id) else None
+    if sp and kicked and sp.kind == "Job":
+        return LaunchSpec(kind="Game", place_id=sp.place_id)
+    if sp:
+        return sp
+    return LaunchSpec(kind="Game", place_id=i.place_id) if i.place_id else LaunchSpec()
 
 
 class Launcher:
@@ -221,8 +255,9 @@ class Launcher:
             a = store.find_by_tracker(tracker)
             if a is None or self.find_by_tracker(tracker):
                 continue
+            spec, isolated = _load_launch(a)
             inst = Instance(account=a, tracker=tracker, launch_pid=0, pid=pid, started=time.time() - 300,
-                            spec=LaunchSpec(), isolated=True)
+                            spec=spec or LaunchSpec(), isolated=isolated)
             if a.background:
                 inst.screen = _running_screen(a)
             with self.lock:
@@ -230,6 +265,15 @@ class Launcher:
             n += 1
         if n and logf:
             logf(f"Found {n} Sober window(s) from an earlier session and took them over.")
+        # invisible screens whose client closed while Cellar was not running (~190 MB each, until that account
+        # launched again)
+        adopted = {i.account.id for i in self.snapshot()}
+        orphans = [sc for sc in (_running_screen(a) for a in store.accounts if a.id not in adopted) if sc]
+        if orphans:
+            if logf:
+                logf(f"Closed {len(orphans)} invisible screen(s) left over from clients that closed while Cellar "
+                     "was not running.")
+            threading.Thread(target=lambda: [background.stop(sc) for sc in orphans], daemon=True).start()
         return n
 
     # ------------------------------------------------------------ launching
@@ -318,6 +362,9 @@ class Launcher:
                 return False
         elif a.tracker_id and sober.window_pid(a.tracker_id):
             sober.stop(0, a.tracker_id)            # leftover from an earlier session
+        # Records of a client that died unnoticed go now - before the new screen takes over the same runtime dir
+        # (their screen was stopped only after the new one had already started there).
+        self.forget_account(a)
 
         if not a.tracker_id:
             a.tracker_id = self._random_tracker()
@@ -350,13 +397,16 @@ class Launcher:
 
         inst = Instance(account=a, tracker=a.tracker_id, launch_pid=proc.pid, started=time.time(),
                         spec=spec.copy(), isolated=isolated, unit=unit, screen=screen)
-        self.forget_account(a)
         with self.lock:
             self.instances.append(inst)
+        _save_launch(a, spec, isolated)
         logf(who + f"Sober is starting ({spec.describe()})" + (" in its own isolated profile..." if isolated else "..."))
 
         for _ in range(180):                        # up to 90 s
             time.sleep(0.5)
+            if inst.user_closed:                    # Stop / Stop all while it was starting: not a failure to report
+                logf(who + "stopped while it was starting.")
+                return False
             wp = sober.window_pid(a.tracker_id)
             if wp:
                 inst.pid = wp
@@ -376,7 +426,9 @@ class Launcher:
         store.save_accounts()
         if not inst.pid:
             logf(who + f"Sober did not show up within 90 s. Details: {log_file}")
-            self._release(inst)
+            inst.user_closed = True                 # don't leave it starting on a screen that is about to go
+            sober.stop(inst.launch_pid, inst.tracker, unit=inst.unit)
+            self._remove(inst)
             return False
         if screen and a.auto_macro:
             # give the game time to load in before the first input
@@ -385,7 +437,8 @@ class Launcher:
                 if inst in self.snapshot() and not inst.macro:
                     self.start_macro(inst, a.auto_macro, logf)
             threading.Thread(target=later, daemon=True).start()
-        if s.priority != "Normal" or s.ram_cap_mb > 0:
+        # CPU priority / RAM limit are for alts: a window marked Full quality (your main) keeps the defaults
+        if not a.full_quality and (s.priority != "Normal" or s.ram_cap_mb > 0):
             err = sober.apply_limits(inst.pid, s.priority, s.ram_cap_mb)
             if err:
                 logf(who + f"could not apply CPU priority / RAM cap: {err}")
@@ -479,7 +532,7 @@ class Launcher:
                     # lost connection: the same server; kicked: the server may refuse it, so the original target
                     same = ev.reason in (0, 277, 279) and ev.job_id and ev.place_id
                     spec = (LaunchSpec(kind="Job", place_id=ev.place_id, job_id=ev.job_id) if same
-                            else (i.spec if i.spec and (i.spec.place_id or i.spec.follow_user_id) else LaunchSpec()))
+                            else again_spec(i, kicked=True))
                     logf(text + (" Rejoining the same server..." if same else " Rejoining..."))
                     self.breaker_record(i.account)
                     self.stop_instance(i)           # user_closed: the watcher must not relaunch it a second time
@@ -490,13 +543,21 @@ class Launcher:
                                      webhook.YELLOW)
 
     def apply_limits_all(self, logf: LogF) -> int:
+        """CPU priority + RAM limit on every running alt. Windows marked Full quality (your main) are set back to
+        normal: they may have been limited before they were marked, or by an older Cellar that limited every window."""
         s = store.settings
-        n = 0
+        n = mains = 0
         for i in self.alive_instances():
-            if i.pid and not sober.apply_limits(i.pid, s.priority, s.ram_cap_mb):
+            if not i.pid:
+                continue
+            if i.account.full_quality:
+                sober.apply_limits(i.pid, "Normal", 0)
+                mains += 1
+            elif not sober.apply_limits(i.pid, s.priority, s.ram_cap_mb):
                 n += 1
-        logf(f"CPU priority '{s.priority}'" + (f" and RAM cap {s.ram_cap_mb} MB" if s.ram_cap_mb > 0 else "")
-             + f" applied to {n} window(s).")
+        logf(f"CPU priority '{s.priority}'" + (f" and RAM limit {s.ram_cap_mb} MB" if s.ram_cap_mb > 0 else "")
+             + f" applied to {n} alt window(s)."
+             + (f" {mains} Full quality window(s) left at normal." if mains else ""))
         return n
 
     # ------------------------------------------------------------ watcher
@@ -567,7 +628,7 @@ class Launcher:
                 logf(f"Watcher: {d.account.name} keeps crashing - the crash breaker stopped relaunching it. Launch it yourself to try again.")
                 continue
             logf(f"Watcher: relaunching {d.account.name}...")
-            self.launch(d.account, d.spec if d.spec and (d.spec.place_id or d.spec.follow_user_id) else LaunchSpec(), logf)
+            self.launch(d.account, again_spec(d), logf)
             gave_up = self.breaker_record(d.account)
             if s.webhook_relaunch:
                 webhook.send("Client relaunched", f"{d.account.name} was brought back by the watcher.", webhook.YELLOW)
