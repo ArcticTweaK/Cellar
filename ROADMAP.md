@@ -57,6 +57,9 @@ the real running app was ~450 MB after hours.
       (only success is cached)
 - [x] **S** Move up / Move down selected a different account afterwards (the selection was read back by row
       after the list had been reordered); `refresh_accounts(select=ids)` now
+- [x] **S** Header said "8 / 6 running": relaunching an account whose client had just died (before the watcher
+      cleared it) kept the dead record, and the new client (same tracker id) made it look alive - a later crash
+      then relaunched the account twice. One record per account now (Launcher.forget_account)
 - [x] **S** Restart (Settings > Size) did not bring Cellar back: the new copy found the old one still quitting
       (background jobs finishing) and handed over to it. The socket now closes when quitting starts, and the
       restarter waits for the old process (max 15 s). Same fix for reopening Cellar right after quitting

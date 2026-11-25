@@ -88,6 +88,16 @@ class Launcher:
     def running(self, a: Account) -> bool:
         return any(self.is_alive(i) for i in self.instances_of(a))
 
+    def forget_account(self, a: Account) -> None:
+        """Drops every record of this account before it gets a new one: one record per account. A record whose
+        client had died (closed, crashed) but that the watcher had not cleared yet otherwise stayed in the list -
+        and since an account keeps its tracker id, the new client made that stale record look alive again: the
+        header said 8 / 6 running, and when that client crashed the watcher relaunched it once per record."""
+        with self.lock:
+            old = [i for i in self.instances if i.account.id == a.id]
+        for i in old:
+            self._remove(i)
+
     def _remove(self, inst: Instance) -> None:
         with self.lock:
             if inst in self.instances:
@@ -337,6 +347,7 @@ class Launcher:
 
         inst = Instance(account=a, tracker=a.tracker_id, launch_pid=proc.pid, started=time.time(),
                         spec=spec.copy(), isolated=isolated, unit=unit, screen=screen)
+        self.forget_account(a)
         with self.lock:
             self.instances.append(inst)
         logf(who + f"Sober is starting ({spec.describe()})" + (" in its own isolated profile..." if isolated else "..."))

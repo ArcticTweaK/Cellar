@@ -58,8 +58,8 @@ class LiveMixin:
                                  "once (Settings)." + ("\n\n" + "\n".join(sub) if sub else ""))
         if alive is None:
             alive = self.launcher.alive_instances()
-        n = len(alive)
-        in_bg = sum(1 for i in alive if i.screen)
+        n = len({i.account.id for i in alive})        # accounts, not records
+        in_bg = len({i.account.id for i in alive if i.screen})
         self.stat_run.set(f"{n} / {len(store.accounts)}",
                           "nothing running" if not n else f"{in_bg} in the background" if in_bg else "in windows")
         if self.tray:

@@ -24,8 +24,11 @@ Cellar is an account manager and multi-instance launcher for Roblox on Linux, bu
 [Sober](https://sober.vinegarhq.org). Add your accounts once, launch as many as you want at the same time, and let
 them farm in the background while you keep using your PC.
 
-It works **next to** the Roblox website, not instead of it: browse games on roblox.com (RoValra and your other
-extensions keep working there), press **Play**, and Cellar asks which of your accounts join.
+Made for **grinding and farming on alts, trading, holding items, AFK-ing in private servers** - or just keeping
+all your accounts in one place and launching them with one click.
+
+**Free and open source (GPL-3.0). No ads, no account, no paywalls** - and the full source is right here, so you
+can check exactly what it does.
 
 ## Features
 
@@ -58,13 +61,20 @@ extensions keep working there), press **Play**, and Cellar asks which of your ac
 ### 👤 Accounts
 - **Account switcher** - log your normal Sober into any account with one right-click.
 - **Colour tags, groups, pins**, drag to reorder, bulk edit; **history** of what each account played and for how long.
-- **Encrypted** with your keyring or a password; export / import to move PCs; automatic backups; auto-lock.
+- **Move PCs** with a password-protected export / import; **auto-lock** (with a password) hides your accounts
+  after a while in the background.
 
 ### 🛠️ Your normal Sober - even with one account
 - **My Sober** - Sober's settings in plain words, FPS cap, and a **Fast Flags** editor that shows which flags
   Roblox really uses.
 - **Roblox logs** - what happened in a session (joined, disconnected and why) with *copy for a bug report*
   (cookies removed). Repair tools for caches and crash dumps.
+
+### 🔒 Open and safe
+- **Your accounts stay on your PC**, encrypted with your keyring or your own password, with automatic backups.
+- **Nothing is uploaded anywhere.** Cellar talks to Roblox - plus GitHub for the update check (can be turned
+  off) and your own Discord webhook if you add one.
+- **Open source** - every line is in this repo.
 
 ### ✨ And more
 Window layouts on **KDE Plasma, Hyprland and Sway** (saved layouts, all monitors) · mute alts or set a volume per
@@ -276,6 +286,21 @@ multi-instance off (Settings) to launch accounts one at a time through your norm
 </details>
 
 ## FAQ
+
+<details>
+<summary><b>Is it free?</b></summary>
+
+Yes. Free and open source under GPL-3.0 - no ads, no account, no paywalls. Join the [Discord][discord] if you
+want to support it or help out.
+</details>
+
+<details>
+<summary><b>Are my accounts and passwords safe?</b></summary>
+
+They are encrypted (your keyring, or your own password) and stored only on your PC, in
+`~/.local/share/cellar/accounts.dat`. Cellar never sends them anywhere except to Roblox itself to log in. With a
+password you can also make Cellar lock itself after a while in the background.
+</details>
 
 <details>
 <summary><b>Can my accounts get banned?</b></summary>
