@@ -60,6 +60,11 @@ the real running app was ~450 MB after hours.
 - [x] **S** Header said "8 / 6 running": relaunching an account whose client had just died (before the watcher
       cleared it) kept the dead record, and the new client (same tracker id) made it look alive - a later crash
       then relaunched the account twice. One record per account now (Launcher.forget_account)
+- [x] **S** Mute / volume never did anything on a real machine: streams were matched by pid, but Sober plays
+      through pipewire-pulse, so every Sober stream had pipewire-pulse's pid. Matched by the Flatpak instance id
+      now (its scope is the client's cgroup); checked against six real clients
+- [x] **S** "Last used" said "4 h ago" for accounts that were playing right then (it was the launch time): running
+      accounts say Now, and the time is set when a client stops (or when Cellar quits leaving it running)
 - [x] **S** Restart (Settings > Size) did not bring Cellar back: the new copy found the old one still quitting
       (background jobs finishing) and handed over to it. The socket now closes when quitting starts, and the
       restarter waits for the old process (max 15 s). Same fix for reopening Cellar right after quitting

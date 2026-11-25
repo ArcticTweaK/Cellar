@@ -1,10 +1,12 @@
 """Per-account sound: mute alts or turn one account down, through PipeWire (pw-dump + wpctl, on every desktop
 with PipeWire). Blocking - call from a worker.
 
-Each Roblox client is its own audio stream. A stream is matched to an account through the process behind it:
-PipeWire records the real pid of every client (pipewire.sec.pid, from the socket), and every process of one
-Sober client lives in the same Flatpak scope (cgroup) as the client's window process - the same way usage.py
-counts CPU per account.
+Each Roblox client is its own audio stream. A stream is matched to an account through the cgroup (Flatpak scope)
+of the client, the same one usage.py counts CPU in. Sober plays through the PulseAudio layer, so PipeWire's
+pipewire.sec.pid is pipewire-pulse for every Sober stream, and application.process.id is the pid inside the
+sandbox (3) - neither tells clients apart (measured 2026-11-24, PipeWire 1.6.9). What does: the Flatpak instance
+id the portal stamps on the client (pipewire.access.portal.instance_id), and each instance runs in the scope
+app-flatpak-<app id>-<instance id>.scope. The pid is only used for programs outside Flatpak.
 """
 
 import json
@@ -13,7 +15,7 @@ from pathlib import Path
 from typing import Dict, Optional, Tuple
 
 from . import sober
-from .usage import cgroup_of
+from .usage import app_slice, cgroup_of
 
 _applied: Dict[int, Tuple[bool, float]] = {}        # stream id -> (mute, volume) Cellar set last
 
@@ -22,28 +24,43 @@ def available() -> bool:
     return bool(sober.which("pw-dump") and sober.which("wpctl"))
 
 
-def _streams() -> Dict[int, int]:
-    """stream node id -> pid of the program playing it."""
+def _client_cgroup(props: dict) -> Optional[Path]:
+    """The cgroup of the program behind a PipeWire client (its props)."""
+    app_id = props.get("pipewire.access.portal.app_id")
+    inst = props.get("pipewire.access.portal.instance_id")
+    if app_id and inst:
+        return app_slice() / f"app-flatpak-{app_id}-{inst}.scope"
+    pid = props.get("pipewire.sec.pid") or props.get("application.process.id")
     try:
-        out = subprocess.run([sober.which("pw-dump")], capture_output=True, text=True, timeout=10).stdout
-        objs = json.loads(out or "[]")
-    except (OSError, ValueError, subprocess.SubprocessError):
-        return {}
+        return cgroup_of(int(pid)) if pid else None
+    except (TypeError, ValueError):
+        return None
+
+
+def streams_of(objs: list) -> Dict[int, Path]:
+    """pw-dump output -> {audio output stream node id: cgroup of the program playing it}."""
     clients = {}
     for o in objs:
         if o.get("type") == "PipeWire:Interface:Client":
-            p = (o.get("info") or {}).get("props") or {}
-            pid = p.get("pipewire.sec.pid") or p.get("application.process.id")
-            if pid:
-                clients[o["id"]] = int(pid)
+            cg = _client_cgroup((o.get("info") or {}).get("props") or {})
+            if cg:
+                clients[o["id"]] = cg
     res = {}
     for o in objs:
         p = (o.get("info") or {}).get("props") or {}
         if o.get("type") == "PipeWire:Interface:Node" and p.get("media.class") == "Stream/Output/Audio":
-            pid = clients.get(p.get("client.id")) or p.get("pipewire.sec.pid") or p.get("application.process.id")
-            if pid:
-                res[o["id"]] = int(pid)
+            cg = clients.get(p.get("client.id")) or _client_cgroup(p)
+            if cg:
+                res[o["id"]] = cg
     return res
+
+
+def _streams() -> Dict[int, Path]:
+    try:
+        out = subprocess.run([sober.which("pw-dump")], capture_output=True, text=True, timeout=10).stdout
+        return streams_of(json.loads(out or "[]"))
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return {}
 
 
 def apply(targets: Dict[Path, Tuple[bool, float]]) -> int:
@@ -54,9 +71,8 @@ def apply(targets: Dict[Path, Tuple[bool, float]]) -> int:
     wp = sober.which("wpctl")
     changed = 0
     streams = _streams()
-    for node, pid in streams.items():
-        cg: Optional[Path] = cgroup_of(pid)
-        want = targets.get(cg) if cg else None
+    for node, cg in streams.items():
+        want = targets.get(cg)
         if want is None:
             continue
         if _applied.get(node) == want:

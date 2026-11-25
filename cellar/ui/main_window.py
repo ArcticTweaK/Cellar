@@ -681,7 +681,12 @@ class MainWindow(AccountsMixin, LaunchMixin, LiveMixin, QMainWindow):
             if i.frozen and i.pid:
                 i.frozen = False
                 sober.freeze(i.pid, False)
-        n = len(self.launcher.alive_instances())
+        alive = self.launcher.alive_instances()
+        for i in alive:                         # last time Cellar sees them: they may close while it is gone
+            i.account.last_used = time.time()
+        if alive:
+            store.save_accounts()
+        n = len(alive)
         if n and self.isVisible() and ask(self, "Quit", f"{n} Sober window(s) started by this app are running.\n\n"
                                           "Close them too? (No = keep them running; they are picked up again next start.)"):
             self.launcher.stop_all(self.log)

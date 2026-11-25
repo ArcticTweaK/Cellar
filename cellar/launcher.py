@@ -102,6 +102,9 @@ class Launcher:
         with self.lock:
             if inst in self.instances:
                 self.instances.remove(inst)
+        if inst.pid:        # it really ran: "Last used" = when it stopped, not when it was launched hours ago
+            inst.account.last_used = max(inst.account.last_used, time.time())
+            store.save_accounts()
         self._release(inst)
 
     @staticmethod

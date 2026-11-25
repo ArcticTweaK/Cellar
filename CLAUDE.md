@@ -74,8 +74,9 @@ cellar/
                   as crash-last.txt); scrub() removes cookies from anything copied into a bug report
   requirements.py system checks (Sober, pasta, sway/wayvnc, ydotool, KWin) + distro install commands (setup + System check)
   updates.py      GitHub releases check (once a day, opt-out), release notes for "What's new", how_to_update()
-  audio.py        per-account sound: pw-dump streams -> pid (pipewire.sec.pid) -> cgroup = the instance; wpctl
-                  set-mute / set-volume. LiveMixin.audio_tick every 5 s; Account.volume (-1 = Mute alts decides)
+  audio.py        per-account sound: pw-dump streams -> Flatpak instance id -> its scope = the instance (sec.pid is
+                  pipewire-pulse for Sober, useless); wpctl set-mute / set-volume. LiveMixin.audio_tick every 5 s;
+                  Account.volume (-1 = Mute alts decides)
   schedule.py     scheduled presets: due() fires starts / stops once a day within a 15 min grace (overnight stops)
   sessions.py     session history on settings.history (JoinRecord ts..end): start / end / close_missing / totals;
                   times come from the Roblox log lines (robloxlog Event.ts) so re-read logs add nothing

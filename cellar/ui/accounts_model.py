@@ -140,7 +140,7 @@ class AccountModel(QAbstractTableModel):
             if c == 4:
                 return self.game_text(a)
             if c == 5:
-                return util.ago(a.last_used)
+                return "Now" if a.id in self.running else util.ago(a.last_used)
         if role == Qt.DecorationRole and c == 0:
             return self.icon_for(a)
         if role == Qt.ForegroundRole and c == 2:
@@ -166,7 +166,7 @@ class AccountModel(QAbstractTableModel):
                 u = self.usage.get(a.id)
                 return -(u[1] if u else -1)
             if c == 5:
-                return -a.last_used
+                return float("-inf") if a.id in self.running else -a.last_used
             return (self.data(index, Qt.DisplayRole) or "").lower()
         return None
 

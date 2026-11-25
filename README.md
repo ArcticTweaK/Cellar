@@ -341,6 +341,6 @@ mode, macros, automation and the multi-instance sandbox.
 Licensed under **GPL-3.0**: free to use, change and share, as long as what you share stays open source under the
 same license. Cellar is not affiliated with Roblox Corporation or VinegarHQ (Sober).
 
-[discord]: https://discord.gg/D6yn7ZcSw2
+[discord]: https://discord.gg/GyTB3wsnPK
 [releases]: https://github.com/ArcticTweaK/Cellar/releases
 [issues]: https://github.com/ArcticTweaK/Cellar/issues

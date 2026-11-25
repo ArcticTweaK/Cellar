@@ -23,7 +23,7 @@ def _cgroup_of(pid: int) -> Optional[Path]:
     return None
 
 
-def _app_slice() -> Path:
+def app_slice() -> Path:
     uid = os.getuid()
     return CGROUP / "user.slice" / f"user-{uid}.slice" / f"user@{uid}.service" / "app.slice"
 
@@ -35,7 +35,7 @@ def available() -> bool:
 def groups_for(instances: Iterable) -> List[Path]:
     """The cgroups of the given running instances (each counted once)."""
     own = _cgroup_of(os.getpid())
-    app = _app_slice()
+    app = app_slice()
     found = set()
     for inst in instances:
         g = _cgroup_of(inst.pid) if inst.pid else None
