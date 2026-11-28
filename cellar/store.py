@@ -4,6 +4,7 @@ import json
 import os
 import shutil
 import threading
+import tempfile
 import time
 from pathlib import Path
 from typing import List, Optional, Tuple
@@ -27,14 +28,21 @@ def live(a: Account) -> LiveInfo:
 
 
 def atomic_write(path, data: bytes, mode: int = 0o600) -> None:
-    path = str(path)
-    tmp = path + ".tmp"
-    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, mode)
-    with os.fdopen(fd, "wb") as f:
-        f.write(data)
-        f.flush()
-        os.fsync(f.fileno())
-    os.replace(tmp, path)
+    path = Path(path)
+    # Exports and background saves can overlap: never share a predictable .tmp file.
+    fd, name = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=path.parent)
+    try:
+        with os.fdopen(fd, "wb") as f:
+            os.fchmod(f.fileno(), mode)
+            f.write(data)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(name, path)
+    finally:
+        try:
+            os.unlink(name)
+        except FileNotFoundError:
+            pass
 
 
 # ---------------------------------------------------------------- settings
@@ -204,14 +212,14 @@ def start_fresh() -> None:
     save_accounts()
 
 
-def save_accounts(fresh_provider: bool = False) -> None:
+def save_accounts(fresh_provider: bool = False) -> bool:
     with _save_lock:
-        _save_accounts(fresh_provider)
+        return _save_accounts(fresh_provider)
 
 
-def _save_accounts(fresh_provider: bool) -> None:
+def _save_accounts(fresh_provider: bool) -> bool:
     if not loaded:
-        return
+        return False
     try:
         renumber()
         data = json.dumps({"accounts": [to_dict(a) for a in accounts]}).encode("utf-8")
@@ -222,16 +230,23 @@ def _save_accounts(fresh_provider: bool) -> None:
             provider = crypto.provider_of(raw) or crypto.pick_provider()
             enc = crypto.encrypt_keyring(data, provider)
         atomic_write(paths.ACCOUNTS_FILE, enc, 0o600)
+        return True
     except Exception as ex:
         log.error("save accounts", ex)
+        return False
 
 
-def set_password(new_pw: Optional[str]) -> None:
-    """None = switch to the keyring (no password)."""
+def set_password(new_pw: Optional[str]) -> bool:
+    """None = switch to the keyring. Keep the old password if encryption / writing fails."""
     global password
-    password = new_pw
-    backup()
-    save_accounts(fresh_provider=new_pw is None)
+    with _save_lock:
+        previous = password
+        backup()
+        password = new_pw
+        if _save_accounts(fresh_provider=new_pw is None):
+            return True
+        password = previous
+        return False
 
 
 def key_location() -> str:
@@ -251,7 +266,7 @@ def backup() -> None:
         if not paths.ACCOUNTS_FILE.exists():
             return
         paths.BACKUP_DIR.mkdir(parents=True, exist_ok=True)
-        dst = paths.BACKUP_DIR / time.strftime("accounts_%Y%m%d_%H%M%S.dat")
+        dst = paths.BACKUP_DIR / (time.strftime("accounts_%Y%m%d_%H%M%S_") + f"{time.time_ns() % 10**9:09d}.dat")
         shutil.copy2(paths.ACCOUNTS_FILE, dst)
         os.chmod(dst, 0o600)
         old = sorted(paths.BACKUP_DIR.glob("accounts_*.dat"))

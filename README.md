@@ -38,12 +38,15 @@ can check exactly what it does.
 - **Background mode** - an account runs on its own invisible screen with its own mouse and keyboard. Nothing
   shows on your desktop, nothing steals your focus. *View screen* to watch it or take over.
 - **Cheap alts** - 30 FPS and the lowest graphics by default: about **0.17 CPU cores and 1 GB RAM** per alt.
-  Your main keeps full quality (no FPS cap, CPU priority or RAM limit). **Freeze** pauses an alt at 0% CPU while it stays in the server.
+  Your main keeps full quality (no FPS cap, CPU priority or RAM limit). **Freeze** pauses an alt; brief wake-ups
+  reduce connection timeouts, but a frozen account can still disconnect.
 - **Screen wall** - live pictures of every background account in one window.
 
 ### 🎮 Launch in two clicks
 - **Your games** as tiles - recent games and your favourites. Click one, press the launch button; it says exactly
-  what will happen (*"Launch 4 accounts into Blox Fruits"*).
+  what will happen (*"Launch 4 accounts into Blox Fruits"*). Running selections say **Relaunch**; a mixed
+  selection says **Launch / relaunch**. The same wording appears below the account list and on right-click.
+  Relaunch uses the destination chosen on Launch (or each account's saved game when enabled).
 - **Servers, private servers, friends** - Quick join picks the emptiest server or a busy one with room for
   everyone; saved private servers; follow a friend from a list of who is online.
 - **The website's Play button opens Cellar** - pick which accounts join that game, server or private server.
@@ -72,6 +75,7 @@ can check exactly what it does.
 
 ### 🔒 Open and safe
 - **Your accounts stay on your PC**, encrypted with your keyring or your own password, with automatic backups.
+  Password changes are confirmed only after the encrypted file is saved; if saving fails, the old password stays valid.
 - **Nothing is uploaded anywhere.** Cellar talks to Roblox - plus GitHub for the update check (can be turned
   off) and your own Discord webhook if you add one.
 - **Open source** - every line is in this repo.

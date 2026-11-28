@@ -308,7 +308,7 @@ class PresetsPage(QWidget):
                     mw.log(f"[{a.name}] skipped - no game saved for it and none on the Launch tab.")
                     continue
                 if spec.kind == "Private" and spec.share_code and not spec.link_code:
-                    if not specs.resolve_saved_share(a, spec, mw.log):
+                    if not specs.resolve_saved_share(a, spec, mw.log, save=False):
                         continue
                 mw.launcher.breaker_clear(a)
                 mw.launcher.launch(a, spec, mw.log)
@@ -319,7 +319,10 @@ class PresetsPage(QWidget):
             mw.log(f"Preset '{p.name}' launched." if ok else "Preset cancelled.")
             if ok:
                 self._place_when_ready(p, time.time() + 60)
-        bg(work, done=done)
+        def failed(ex):
+            mw.set_launching(False)
+            mw.log(f"Preset '{p.name}' stopped because of an error: {ex}. You can try launching it again.")
+        bg(work, done=done, err=failed)
 
     def _place_when_ready(self, p: Preset, deadline: float):
         """Waits for the windows, then puts each one where the preset saved it (or into the grid)."""

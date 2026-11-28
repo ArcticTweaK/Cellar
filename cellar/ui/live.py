@@ -28,6 +28,7 @@ class LiveMixin:
         self.model.frozen = {i.account.id for i in alive if i.frozen}
         self.model.macro = {i.account.id for i in alive if i.macro and i.macro.running}
         self.model.refresh_status()
+        self.refresh_launch_action()
         self.autohide_columns()
         self.update_header(alive)
         return alive

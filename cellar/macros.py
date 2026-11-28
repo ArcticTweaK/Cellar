@@ -91,17 +91,25 @@ def parse(text: str) -> Tuple[List[Step], List[str]]:
             elif op in ("tap", "down", "up"):
                 steps.append(_at(i, op, (background.keysym(rest),)))
             elif op == "key":
-                steps.append(_at(i, "key", (background.keysym(a[0]), int(a[1]) if len(a) > 1 else 100)))
+                ms = int(a[1]) if len(a) > 1 else 100
+                if ms < 0:
+                    raise ValueError("key hold time must be zero or more milliseconds")
+                steps.append(_at(i, "key", (background.keysym(a[0]), ms)))
             elif op == "type":
                 steps.append(_at(i, "type", (rest,)))
             elif op in ("click", "rclick", "move"):
                 steps.append(_at(i, op, (int(a[0]), int(a[1]))))
             elif op == "scroll":
+                if not a or a[0].lower() not in ("up", "down"):
+                    raise ValueError("scroll direction must be up or down")
                 steps.append(_at(i, "scroll", (a[0].lower() == "up", int(a[1]) if len(a) > 1 else background.W // 2,
                                          int(a[2]) if len(a) > 2 else background.H // 2)))
             elif op == "wait":
                 lo, _, hi = a[0].partition("-")
-                steps.append(_at(i, "wait", (int(lo), int(hi) if hi else int(lo))))
+                low, high = int(lo), int(hi) if hi else int(lo)
+                if low < 0 or high < low:
+                    raise ValueError("wait range must go from a smaller to a larger non-negative time")
+                steps.append(_at(i, "wait", (low, high)))
             else:
                 raise ValueError(f"unknown step '{op}'")
         except (IndexError, ValueError) as ex:
@@ -115,7 +123,7 @@ def parse(text: str) -> Tuple[List[Step], List[str]]:
 
 def _has_pause(steps: List[Step]) -> bool:
     for op, args in steps:
-        if op in ("wait", "key"):
+        if (op == "wait" and args[0] > 0) or (op == "key" and args[1] > 0):
             return True
         if op == "repeat" and _has_pause(args[1]):
             return True

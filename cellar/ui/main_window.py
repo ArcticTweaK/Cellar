@@ -140,8 +140,9 @@ class MainWindow(AccountsMixin, LaunchMixin, LiveMixin, QMainWindow):
         bar.addWidget(btn("Details", self.details_selected,
                           tip="Robux, Premium, account age and login state of the selected account(s)"))
         bar.addStretch(1)
-        bar.addWidget(btn("Launch", self.launch_selected, icon="play", primary=True,
-                          tip="Launch the selected accounts where the Launch tab says (Enter)"))
+        self.account_launch = btn("Launch", self.launch_selected, icon="play", primary=True,
+                                  tip="Launch or replace the selected accounts where the Launch tab says (Enter)")
+        bar.addWidget(self.account_launch)
         bar.addWidget(btn("Stop", self.stop_selected, tip="Close the selected accounts' Roblox windows"))
         bar.addWidget(btn("Stop all", self.stop_all, tip="Close every Roblox window Cellar started (Ctrl+Shift+S)"))
         lv.addLayout(bar)

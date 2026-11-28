@@ -627,13 +627,19 @@ class SettingsPage(QWidget, _Bound):
         pw = PasswordDialog.ask(self, "Accounts password", "New password for your accounts file:", confirm=True)
         if pw is None:
             return
-        store.set_password(pw)
+        if not store.set_password(pw):
+            warn(self, "Password unchanged", "Could not save your accounts file. Your previous password still applies. "
+                 "Check that the data folder is writable and has free space, then try again.")
+            return
         self.update_status()
         info(self, "Password", "Your accounts file is now protected by this password. You will be asked for it at "
                                "every start. It is the same format as the Windows app.")
 
     def remove_password(self):
-        store.set_password(None)
+        if not store.set_password(None):
+            warn(self, "Encryption unchanged", "Could not save your accounts file with the keyring. Your previous "
+                 "password still applies. Check the log for details and try again.")
+            return
         self.update_status()
         info(self, "Encryption", f"Your accounts file is now encrypted with {store.key_location()} - no password needed.")
 
@@ -821,6 +827,15 @@ Ctrl+F = search, F5 = refresh status.</li>
 <tt>cellar stop all</tt> (<tt>cellar help</tt> for all). <b>Add to app menu</b> (right-click an account, or
 on the Presets tab) makes a launcher entry.</li>
 </ul>
+
+<p>Macro timing mistakes (reversed wait ranges or negative key hold times) are flagged before the macro runs.
+A looping macro needs a positive pause; a zero-time wait alone does not count.</p>
+
+<h3>Launch and relaunch</h3>
+<p>Select a running account and the launch controls say <b>Relaunch</b>; select running and stopped accounts
+and they say <b>Launch / relaunch</b>. Relaunch uses the destination on the Launch tab, or each account's saved
+game when that option is enabled. In single-instance mode, replacing a running window still requires
+<b>Close an account's previous window</b> in Settings.</p>
 
 <h3>More</h3>
 <ul>

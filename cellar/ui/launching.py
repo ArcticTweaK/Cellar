@@ -142,6 +142,7 @@ class LaunchMixin:
         self.launching = on
         self.cancel = cancel if on else None
         self.launch_page.set_launching(on)
+        self.refresh_launch_action()
 
     def launch_selected(self):
         sel = self.selected_accounts()
@@ -173,8 +174,11 @@ class LaunchMixin:
         self.start_launch(sel, LaunchSpec(kind="Job", place_id=place_id, job_id=job), allow_saved=False)
 
     def start_launch(self, accs: List[Account], fixed: Optional[LaunchSpec] = None, allow_saved: bool = True):
+        if not accs:
+            self.log("Select one or more accounts first.")
+            return
         if self.launching:
-            self.log("A launch is already running. Press Stop to cancel it.")
+            self.log("A launch is already running. Press Cancel to stop it.")
             return
         form = self.launch_page.read_form()
         cancel = threading.Event()

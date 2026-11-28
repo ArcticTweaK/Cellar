@@ -71,3 +71,10 @@ def share_code_of(link: str) -> str:
 def private_link_code(link: str) -> str:
     m = re.search(r"privateServerLinkCode=([^&#\s]+)", link or "")
     return m.group(1) if m else ""
+
+
+def launch_action(account_ids, running_ids) -> str:
+    """Name the effect for an offline, running, or mixed selection (no process scans on the UI thread)."""
+    ids = set(account_ids)
+    count = len(ids.intersection(running_ids))
+    return "Relaunch" if ids and count == len(ids) else "Launch / relaunch" if count else "Launch"

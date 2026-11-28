@@ -114,3 +114,16 @@ class Blocks(unittest.TestCase):
         r.stop()
         t.join(2)
         self.assertEqual(done[-1], False)
+
+
+class InvalidTiming(unittest.TestCase):
+    def test_bad_timings_are_reported_before_the_macro_starts(self):
+        for text in ("key w -5\nwait 10", "wait 200-100", "scroll sideways\nwait 10"):
+            with self.subTest(text=text):
+                self.assertTrue(any(e.startswith("line 1:") for e in macros.parse(text)[1]))
+
+    def test_zero_time_steps_do_not_satisfy_the_loop_pause_guard(self):
+        for text in ("move 10 10\nwait 0", "key w 0", "repeat 3 {\nwait 0\n}"):
+            with self.subTest(text=text):
+                self.assertTrue(any("without pauses" in e for e in macros.parse(text)[1]))
+        self.assertEqual(macros.parse("move 10 10\nwait 0\nwait 1")[1], [])

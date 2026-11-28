@@ -537,7 +537,9 @@ class LaunchPage(QWidget):
 
     def update_launch_text(self):
         """The launch button says what will happen: how many accounts, and where."""
-        n = len(self.mw.selected_accounts()) if hasattr(self.mw, "table") else 0
+        selected = self.mw.selected_accounts() if hasattr(self.mw, "table") else []
+        n = len(selected)
+        action = util.launch_action((a.id for a in selected), self.mw.model.running)
         mode = self.mode()
         where = ""
         if mode == "Game":
@@ -556,9 +558,9 @@ class LaunchPage(QWidget):
         if not n:
             text = "Select accounts to launch"
         elif where:
-            text = f"Launch {who} into {where}"
+            text = f"{action} {who} into {where}"
         else:
-            text = f"Launch {who}"
+            text = f"{action} {who}"
         fm = self.b_launch.fontMetrics()
         self.b_launch.setText(fm.elidedText(text, Qt.ElideRight, max(200, self.b_launch.width() - 60)))
         self.b_launch.setToolTip(text + ("" if n else " - click accounts in the list (Ctrl / Shift for several)"))

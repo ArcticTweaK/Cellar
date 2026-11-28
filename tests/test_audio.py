@@ -40,3 +40,33 @@ class StreamsOf(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ApplyingAudio(unittest.TestCase):
+    def setUp(self):
+        for patch in (mock.patch.object(audio, '_applied', {}),
+                      mock.patch.object(audio, 'available', return_value=True),
+                      mock.patch.object(audio.sober, 'which', return_value='/test/wpctl')):
+            patch.start()
+            self.addCleanup(patch.stop)
+
+    def test_failed_command_is_retried_on_next_tick(self):
+        import subprocess
+        cg = Path('/cg/test.scope')
+        with mock.patch.object(audio, '_streams', return_value={42: cg}), \
+                mock.patch.object(audio.subprocess, 'run', side_effect=subprocess.CalledProcessError(1, 'wpctl')):
+            self.assertEqual(audio.apply({cg: (True, 0.0)}), 0)
+        with mock.patch.object(audio, '_streams', return_value={42: cg}), \
+                mock.patch.object(audio.subprocess, 'run') as run:
+            self.assertEqual(audio.apply({cg: (True, 0.0)}), 1)
+            self.assertEqual(run.call_count, 2)
+
+    def test_reused_node_id_gets_settings_for_new_client(self):
+        first, second = Path('/cg/first.scope'), Path('/cg/second.scope')
+        with mock.patch.object(audio.subprocess, 'run') as run:
+            with mock.patch.object(audio, '_streams', return_value={42: first}):
+                self.assertEqual(audio.apply({first: (True, 0.0)}), 1)
+                self.assertEqual(audio.apply({first: (True, 0.0)}), 0)
+            with mock.patch.object(audio, '_streams', return_value={42: second}):
+                self.assertEqual(audio.apply({second: (True, 0.0)}), 1)
+            self.assertEqual(run.call_count, 4)

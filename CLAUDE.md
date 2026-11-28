@@ -221,3 +221,15 @@ measured at the previous start). Cellar sits next to roblox.com + RoValra: no we
 - URI encoding must be uppercase percent-escapes (`sober._urlencode`) or Sober joins slowly via its home screen.
 - Sober's `enable_gamemode` is forced off in isolated profiles on purpose.
 - Users' accounts.dat / cookies are credentials: never log, print or send them anywhere.
+
+## Audit additions (2026-11-28)
+
+`util.launch_action(ids, running_ids)` supplies Launch / Relaunch / Launch / relaunch labels. The UI uses
+`model.running` (refreshed by update_running) to avoid scanning processes just to paint a button. A relaunch uses
+the Launch tab / saved-game destination; it does not imply the currently joined server. `account_launch` is the
+account-list button. `refresh_launch_action()` runs on selection/live-state/batch-state changes.
+
+`store.save_accounts()` now returns bool; `store.set_password()` is transactional under the save lock and returns
+False on failure, restoring the old password. Password dialogs check this result before claiming success.
+`atomic_write()` uses a unique private tempfile per call; backup names include sub-second time. Keep these tests
+isolated (tests/test_store.py). Release follow-ups and limits of this audit are in ROADMAP.md.

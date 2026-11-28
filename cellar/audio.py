@@ -17,7 +17,7 @@ from typing import Dict, Optional, Tuple
 from . import sober
 from .usage import app_slice, cgroup_of
 
-_applied: Dict[int, Tuple[bool, float]] = {}        # stream id -> (mute, volume) Cellar set last
+_applied: Dict[int, tuple] = {}        # stream id -> (client cgroup, mute, volume) Cellar set last
 
 
 def available() -> bool:
@@ -75,14 +75,16 @@ def apply(targets: Dict[Path, Tuple[bool, float]]) -> int:
         want = targets.get(cg)
         if want is None:
             continue
-        if _applied.get(node) == want:
+        stamp = (cg, *want)      # PipeWire can reuse a node id for a different client's new stream
+        if _applied.get(node) == stamp:
             continue
         mute, vol = want
         try:
-            subprocess.run([wp, "set-mute", str(node), "1" if mute else "0"], capture_output=True, timeout=5)
+            subprocess.run([wp, "set-mute", str(node), "1" if mute else "0"], capture_output=True, timeout=5,
+                           check=True)
             subprocess.run([wp, "set-volume", str(node), f"{max(0.0, min(1.5, vol)):.2f}"], capture_output=True,
-                           timeout=5)
-            _applied[node] = want
+                           timeout=5, check=True)
+            _applied[node] = stamp
             changed += 1
         except (OSError, subprocess.SubprocessError):
             pass

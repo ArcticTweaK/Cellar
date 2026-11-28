@@ -537,8 +537,8 @@ class Launcher:
                     self.breaker_record(i.account)
                     self.stop_instance(i)           # user_closed: the watcher must not relaunch it a second time
                     time.sleep(2)
-                    self.launch(i.account, spec, logf)
-                    if s.webhook_relaunch:
+                    relaunched = self.launch(i.account, spec, logf)
+                    if relaunched and s.webhook_relaunch:
                         webhook.send("Client rejoined", f"{i.account.name} rejoined after: {ev.describe()}.",
                                      webhook.YELLOW)
 
@@ -623,14 +623,17 @@ class Launcher:
                     d.offline_logged = True
             return
         for d in dead:
+            # Stop or account removal may happen while the network check is in flight.
+            if d.user_closed or d not in self.snapshot():
+                continue
             self._remove(d)
             if not self.breaker_allows(d.account):
                 logf(f"Watcher: {d.account.name} keeps crashing - the crash breaker stopped relaunching it. Launch it yourself to try again.")
                 continue
             logf(f"Watcher: relaunching {d.account.name}...")
-            self.launch(d.account, again_spec(d), logf)
+            relaunched = self.launch(d.account, again_spec(d), logf)
             gave_up = self.breaker_record(d.account)
-            if s.webhook_relaunch:
+            if relaunched and s.webhook_relaunch:
                 webhook.send("Client relaunched", f"{d.account.name} was brought back by the watcher.", webhook.YELLOW)
             if gave_up:
                 mins = max(1, s.crash_breaker_cooldown_min)

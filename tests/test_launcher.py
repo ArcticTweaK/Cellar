@@ -148,3 +148,37 @@ class AgainSpec(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class WatcherRecovery(unittest.TestCase):
+    def setUp(self):
+        self.L = launcher.Launcher()
+        self.inst = launcher.Instance(account=Account(username='test'), spec=LaunchSpec(place_id=123))
+        self.L.instances.append(self.inst)
+        for patch in (mock.patch.object(self.L, 'is_alive', return_value=False),
+                      mock.patch.object(self.L, '_remove', side_effect=lambda i: self.L.instances.remove(i)),
+                      mock.patch.object(launcher.sober, 'scan', return_value=[]),
+                      mock.patch.object(launcher.time, 'sleep'),
+                      mock.patch.object(store.settings, 'auto_relaunch', True),
+                      mock.patch.object(store.settings, 'watcher_use_presence', False),
+                      mock.patch.object(store.settings, 'low_ram_close_mb', 0),
+                      mock.patch.object(store.settings, 'webhook_crash', False),
+                      mock.patch.object(store.settings, 'webhook_relaunch', True)):
+            patch.start()
+            self.addCleanup(patch.stop)
+
+    def test_failed_relaunch_does_not_announce_success(self):
+        with mock.patch.object(launcher.api, 'internet_ok', return_value=True), \
+                mock.patch.object(self.L, 'launch', return_value=False), \
+                mock.patch.object(launcher.webhook, 'send') as send:
+            self.L.watcher_tick(lambda _: None, lambda: None)
+        self.assertFalse(any(c.args[0] == 'Client relaunched' for c in send.call_args_list))
+
+    def test_stop_during_connectivity_check_prevents_relaunch(self):
+        def connected():
+            self.inst.user_closed = True
+            return True
+        with mock.patch.object(launcher.api, 'internet_ok', side_effect=connected), \
+                mock.patch.object(self.L, 'launch') as launch:
+            self.L.watcher_tick(lambda _: None, lambda: None)
+        launch.assert_not_called()

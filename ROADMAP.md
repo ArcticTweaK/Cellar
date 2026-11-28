@@ -88,6 +88,32 @@ the real running app was ~450 MB after hours.
       (background jobs finishing) and handed over to it. The socket now closes when quitting starts, and the
       restarter waits for the old process (max 15 s). Same fix for reopening Cellar right after quitting
 
+## Release-readiness audit — 2026-11-28
+
+- [x] Launch controls (right-click, account-list button, Launch tab) distinguish stopped, running, and mixed
+      selections; update automatically when a client closes, and disable duplicate launches during a batch.
+- [x] Empty launch requests return a helpful message instead of failing in the worker.
+- [x] Password/keyring changes report failed writes, restore the previous in-memory password, and preserve the
+      existing encrypted file. Concurrent exports/saves use separate temporary files; rapid backups no longer
+      overwrite another backup made in the same second.
+- [x] Recovery webhooks no longer claim a failed relaunch/rejoin succeeded; Stop during a connectivity check
+      prevents that pending watcher relaunch.
+- [x] Preset exceptions release the launch controls; resolving a preset share link leaves the account's own
+      saved game alone.
+- [x] Failed PipeWire commands retry on the next check; reused stream IDs are matched to the new client before
+      using cached volume settings.
+- [x] Reversed wait ranges, negative key holds and invalid scroll directions are caught in the macro editor;
+      zero-time waits/holds no longer bypass the loop's pause check.
+- [ ] **M** Recovery queue: retry a failed automatic relaunch with bounded backoff, clear pending/retrying state,
+      and cancellation when the user stops/removes the account. Current automatic launch failures can drop the
+      dead record, leaving no further retry (manual launch still works).
+- [ ] **M** Launch cancellation across all stages: cancel ticket/profile preparation and an in-progress Sober
+      startup, with one final cancelled result; coordinate Stop, schedules and watcher actions per account.
+- [ ] **S** Show save failures on account edits/import/removal too (save_accounts now returns success/failure;
+      most existing callers still only log write errors).
+- [ ] **M** Real-user release matrix: overnight recovery, network outage/reconnect, mixed main+alts, password /
+      keyring failures, and users on other desktops. Automated tests cannot establish these all work in the wild.
+
 ## 1. Look and feel
 
 - [x] Theme system: Blossom, Midnight, Mint, Ember, Graphite, Daylight, System (Settings > Appearance)

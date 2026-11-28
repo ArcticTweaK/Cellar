@@ -74,6 +74,14 @@ class AccountsMixin:
 
     def on_selection(self):
         self.launch_page.update_selection(self.selected_accounts())
+        self.refresh_launch_action()
+
+    def refresh_launch_action(self):
+        sel = self.selected_accounts()
+        if hasattr(self, "account_launch"):
+            self.account_launch.setText(util.launch_action((a.id for a in sel), self.model.running))
+            self.account_launch.setEnabled(bool(sel) and not self.launching)
+        self.launch_page.update_launch_text()
 
     @staticmethod
     def _volume_of(a: Account) -> int:
@@ -106,8 +114,11 @@ class AccountsMixin:
             return
         leader = view.indexAt(pos).data(ACCOUNT_ROLE) or sel[0]
         m = QMenu(self)
-        m.addAction("Launch", self.launch_selected)
-        m.addAction("Stop", self.stop_selected)
+        action = util.launch_action((a.id for a in sel), self.model.running)
+        m.addAction(action, lambda: self.start_launch(sel)).setEnabled(not self.launching)
+        m.addAction("Stop", lambda: bg(lambda: [self.launcher.stop_account(a, self.log) for a in sel],
+                                      done=lambda _: self.update_running())).setEnabled(
+                                          any(a.id in self.model.running for a in sel))
         bm = m.addMenu(f"Bring accounts to {leader.name}'s server")
         others = [a for a in sel if a is not leader]
         if others:
@@ -136,7 +147,7 @@ class AccountsMixin:
         insts = [i for a in sel for i in self.launcher.instances_of(a) if self.launcher.is_alive(i)]
         if insts:
             if any(not i.frozen for i in insts):
-                m.addAction("Freeze (0% CPU, keeps it open)",
+                m.addAction("Freeze (pause the client)",
                             lambda: bg(lambda: [self.launcher.freeze(i, True, self.log) for i in insts if not i.frozen]))
             if any(i.frozen for i in insts):
                 m.addAction("Resume", lambda: bg(lambda: [self.launcher.freeze(i, False, self.log)
